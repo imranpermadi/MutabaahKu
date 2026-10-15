@@ -10,17 +10,14 @@ import {
   Compass, 
   BookOpen, 
   Calendar, 
-  Heart,
-  Wifi,
-  WifiOff,
-  RefreshCw,
-  RotateCw,
-  Cloud,
-  Eye,
-  Shield,
-  LogOut
+  RotateCw, 
+  Eye, 
+  Shield, 
+  LogOut,
+  Download,
+  X
 } from 'lucide-react';
-import { db, seedInitialData } from './lib/db';
+import { db, seedInitialData, addChildProfile } from './lib/db';
 import { syncOfflineQueueToSupabase, isSupabaseConfigured, supabase, executeFullSync } from './lib/supabase';
 import { UserRole, UserGender, UserProfile, IbadahDailyLog } from './types/database';
 import { MascotCharacter } from './components/mascot/MascotCharacter';
@@ -50,9 +47,29 @@ export function App() {
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [syncToast, setSyncToast] = useState<{ show: boolean; msg: string; isError?: boolean } | null>(null);
 
-  // Initialize offline seed data and listen for Google SSO Auth on boot
+  // PWA Install State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  // Multi-Child Control State
+  const [selectedChildId, setSelectedChildId] = useState<string>('');
+
+  // Initialize offline seed data, listen for Google SSO Auth, and listen for PWA install prompt
   useEffect(() => {
     seedInitialData();
+
+    // PWA Install Event Listener
+    const handleBeforeInstall = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', () => {
+      setShowInstallBanner(false);
+      setDeferredPrompt(null);
+    });
 
     if (supabase) {
       supabase.auth.getSession().then(({ data: { session } }) => {
@@ -71,6 +88,7 @@ export function App() {
 
       return () => {
         authListener.subscription.unsubscribe();
+        window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
       };
     }
 
@@ -83,8 +101,19 @@ export function App() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
     };
   }, []);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBanner(false);
+    }
+    setDeferredPrompt(null);
+  };
 
   const handleAuthUser = async (user: any) => {
     setCurrentUser(user);
@@ -136,15 +165,24 @@ export function App() {
   // Dexie Live Queries
   const studentProfile = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').first());
   const parentProfile = useLiveQuery(() => db.user_profiles.where('role').equals('PARENT').first());
-  const checklists = useLiveQuery(() => db.murojaah_checklists.toArray()) || [];
+  const allChildren = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').toArray()) || [];
+  
+  // Active child being monitored or practicing
+  const activeChild = (allChildren.find(c => c.id === selectedChildId) || studentProfile || allChildren[0]) as UserProfile | undefined;
+  
+  const checklists = useLiveQuery(() => 
+    db.murojaah_checklists.toArray()
+  ) || [];
+
   const today = new Date().toISOString().split('T')[0];
   const todayIbadahLog = useLiveQuery(() => 
-    db.ibadah_daily_logs.where('student_id').equals(studentProfile?.id || '').first()
+    db.ibadah_daily_logs.where('student_id').equals(activeChild?.id || '').first(),
+    [activeChild?.id]
   );
 
   const defaultIbadahLog: IbadahDailyLog = {
-    id: `log-${studentProfile?.id || 'std-1'}-${today}`,
-    student_id: studentProfile?.id || 'std-1',
+    id: `log-${activeChild?.id || 'std-1'}-${today}`,
+    student_id: activeChild?.id || 'std-1',
     log_date: today,
     sholat_subuh: 'BERJAMAAH',
     sholat_dzuhur: 'BERJAMAAH',
@@ -195,20 +233,20 @@ export function App() {
   };
 
   const handleWaterTree = async () => {
-    if (!studentProfile) return;
-    const newDrops = Math.max(0, studentProfile.water_drops - 10);
-    const newLevel = Math.min(5, studentProfile.garden_tree_level + 1);
-    await db.user_profiles.update(studentProfile.id, {
+    if (!activeChild) return;
+    const newDrops = Math.max(0, activeChild.water_drops - 10);
+    const newLevel = Math.min(5, activeChild.garden_tree_level + 1);
+    await db.user_profiles.update(activeChild.id, {
       water_drops: newDrops,
       garden_tree_level: newLevel
     });
   };
 
   const handleStepCompleted = async () => {
-    if (!studentProfile) return;
-    await db.user_profiles.update(studentProfile.id, {
-      star_points: studentProfile.star_points + 10,
-      water_drops: studentProfile.water_drops + 5
+    if (!activeChild) return;
+    await db.user_profiles.update(activeChild.id, {
+      star_points: activeChild.star_points + 10,
+      water_drops: activeChild.water_drops + 5
     });
   };
 
@@ -231,10 +269,10 @@ export function App() {
       reviewed_at: new Date().toISOString()
     });
 
-    if (studentProfile) {
-      await db.user_profiles.update(studentProfile.id, {
-        star_points: studentProfile.star_points + 20,
-        water_drops: studentProfile.water_drops + 10
+    if (activeChild) {
+      await db.user_profiles.update(activeChild.id, {
+        star_points: activeChild.star_points + 20,
+        water_drops: activeChild.water_drops + 10
       });
     }
   };
@@ -246,10 +284,10 @@ export function App() {
       reviewed_at: new Date().toISOString()
     });
 
-    if (studentProfile) {
-      await db.user_profiles.update(studentProfile.id, {
-        star_points: studentProfile.star_points + stars,
-        water_drops: studentProfile.water_drops + 15
+    if (activeChild) {
+      await db.user_profiles.update(activeChild.id, {
+        star_points: activeChild.star_points + stars,
+        water_drops: activeChild.water_drops + 15
       });
     }
   };
@@ -259,81 +297,102 @@ export function App() {
   };
 
   const handleToggleGender = async () => {
-    if (!studentProfile) return;
-    const nextGender: UserGender = studentProfile.gender === 'PUTRA' ? 'PUTRI' : 'PUTRA';
-    await db.user_profiles.update(studentProfile.id, { gender: nextGender });
+    if (!activeChild) return;
+    const nextGender: UserGender = activeChild.gender === 'PUTRA' ? 'PUTRI' : 'PUTRA';
+    await db.user_profiles.update(activeChild.id, { gender: nextGender });
   };
 
   const pendingChecklists = checklists.filter(c => c.parent_review_status === 'PENDING');
 
   return (
-    <div className="min-h-screen bg-[#F0FDF4]/60 text-slate-800 pb-16 selection:bg-emerald-200">
-      {/* Top Application Bar */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-2 border-emerald-500/10 shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+    <div className="min-h-screen bg-[#F0FDF4]/80 text-slate-800 pb-16 selection:bg-emerald-200 overflow-x-hidden w-full max-w-full">
+      {/* PWA INSTALL BANNER (Tampil jika browser mendukung PWA) */}
+      {showInstallBanner && (
+        <div className="bg-gradient-to-r from-emerald-700 to-teal-800 text-white px-4 py-2.5 text-xs font-bold flex items-center justify-between gap-2 shadow-md">
+          <div className="flex items-center gap-2">
+            <Download className="w-4 h-4 text-amber-300 flex-shrink-0 animate-bounce" />
+            <span>Pasang <strong>MutabaahKu PWA</strong> di HP Anda untuk akses instan & 100% offline!</span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              onClick={handleInstallPWA}
+              className="bg-amber-400 hover:bg-amber-300 text-amber-950 font-black px-3 py-1 rounded-xl text-xs shadow-sm transition-all active:scale-95"
+            >
+              Pasang Sekarang
+            </button>
+            <button
+              onClick={() => setShowInstallBanner(false)}
+              className="p-1 text-emerald-200 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Top Application Bar (Optimized for Mobile Responsiveness & No Horizontal Overflow) */}
+      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b-2 border-emerald-500/10 shadow-sm max-w-full">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-3">
           {/* Brand Logo & Name */}
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-black text-xl shadow-chunky-emerald">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center font-black text-base sm:text-xl shadow-chunky-emerald">
               M
             </div>
             <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-black text-lg sm:text-xl text-emerald-950 tracking-tight">
-                  Mutabaah<span className="text-emerald-600">Ku</span>
-                </span>
-              </div>
-              <p className="text-[10px] text-slate-400 font-semibold hidden sm:block">
-                Sahabat Ceria Hafalan & Ibadah Anak Sholih
+              <span className="font-black text-base sm:text-xl text-emerald-950 tracking-tight">
+                Mutabaah<span className="text-emerald-600">Ku</span>
+              </span>
+              <p className="text-[10px] text-slate-400 font-semibold hidden md:block">
+                Sahabat Ceria Hafalan & Ibadah
               </p>
             </div>
           </div>
 
           {/* User Gamification Stats Strip / Mode Tamu Indicator */}
           {!currentUser ? (
-            <div className="flex items-center gap-1.5 bg-emerald-100/90 text-emerald-950 font-black text-xs px-3 py-1.5 rounded-xl border border-emerald-300 shadow-2xs">
+            <div className="hidden sm:flex items-center gap-1.5 bg-emerald-100/90 text-emerald-950 font-black text-xs px-2.5 py-1 rounded-xl border border-emerald-300 shadow-2xs">
               <Sparkles className="w-3.5 h-3.5 text-emerald-600 fill-emerald-500 animate-pulse" />
-              <span className="hidden sm:inline">Mode Tamu (Eksplorasi)</span>
-              <span className="sm:hidden">Mode Tamu</span>
+              <span>Mode Tamu</span>
             </div>
           ) : (
-            currentRole === 'STUDENT' && studentProfile && (
-              <div className="flex items-center gap-2 sm:gap-3">
+            currentRole === 'STUDENT' && activeChild && (
+              <div className="flex items-center gap-1.5 sm:gap-2.5">
                 {/* Daily Streak */}
-                <div className="flex items-center gap-1 bg-amber-50 text-amber-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-amber-200">
-                  <Flame className="w-4 h-4 fill-amber-500 text-amber-500" />
-                  <span>{studentProfile.daily_streak} Hari</span>
+                <div className="flex items-center gap-1 bg-amber-50 text-amber-950 font-black text-xs px-2 py-1 rounded-xl border border-amber-200">
+                  <Flame className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                  <span>{activeChild.daily_streak || 1}d</span>
                 </div>
 
                 {/* Star Points */}
-                <div className="flex items-center gap-1 bg-emerald-50 text-emerald-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-emerald-200">
-                  <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
-                  <span>{studentProfile.star_points}</span>
+                <div className="flex items-center gap-1 bg-emerald-50 text-emerald-950 font-black text-xs px-2 py-1 rounded-xl border border-emerald-200">
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
+                  <span>{activeChild.star_points || 0}</span>
                 </div>
 
                 {/* Water Drops */}
-                <div className="hidden sm:flex items-center gap-1 bg-sky-50 text-sky-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-sky-200">
-                  <Droplets className="w-4 h-4 fill-sky-400 text-sky-500" />
-                  <span>{studentProfile.water_drops}</span>
+                <div className="hidden sm:flex items-center gap-1 bg-sky-50 text-sky-950 font-black text-xs px-2 py-1 rounded-xl border border-sky-200">
+                  <Droplets className="w-3.5 h-3.5 fill-sky-400 text-sky-500" />
+                  <span>{activeChild.water_drops || 0}</span>
                 </div>
               </div>
             )
           )}
 
           {/* Role Switcher & Cloud Sync Indicator */}
-          <div className="flex items-center gap-2">
-            {/* Sync Cloud Otomatis (Tanpa Popup Modal) */}
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            {/* Sync Cloud Otomatis */}
             <button
               onClick={handleAutoSync}
               disabled={isSyncing}
               title="Sinkronisasi Langsung Otomatis 2-Arah dengan Cloud"
-              className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-2xs border active:scale-95 ${
+              className={`p-1.5 sm:px-3 sm:py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-2xs border active:scale-95 ${
                 isOnline 
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100' 
                   : 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
               }`}
             >
               <RotateCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{isSyncing ? 'Menyinkronkan...' : 'Sync'}</span>
+              <span className="hidden md:inline">{isSyncing ? 'Sync...' : 'Sync'}</span>
             </button>
 
             {/* Tombol Akses Admin Console jika akun imranpermadi@gmail.com */}
@@ -341,48 +400,42 @@ export function App() {
               <button
                 onClick={() => setIsAdminOpen(true)}
                 title="Kelola Data Live Cloud Supabase (CRUD)"
-                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs px-2.5 py-1.5 rounded-xl shadow-2xs flex items-center gap-1.5 active:scale-95 transition-all border border-purple-400"
+                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs px-2 py-1.5 sm:px-2.5 rounded-xl shadow-2xs flex items-center gap-1.5 active:scale-95 transition-all border border-purple-400"
               >
                 <Shield className="w-3.5 h-3.5 text-purple-200" />
-                <span className="hidden md:inline">Admin Console</span>
+                <span className="hidden sm:inline">Admin</span>
               </button>
             )}
 
-            {/* Role Badge & Identity (Pemisahan Akun Otomatis Sesuai Akun Google) */}
+            {/* Role Badge & Identity */}
             {currentRole === 'PARENT' ? (
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 bg-emerald-800 text-white font-black text-xs px-3 py-1.5 rounded-xl border border-emerald-700 shadow-sm">
-                  <ShieldCheck className="w-4 h-4 text-emerald-300" />
+              <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1 bg-emerald-800 text-white font-black text-xs px-2.5 py-1.5 rounded-xl border border-emerald-700 shadow-sm">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
                   <span className="hidden sm:inline">Portal Orang Tua</span>
-                  <span className="sm:hidden">Orang Tua</span>
-                  {pendingChecklists.length > 0 && (
-                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse ml-0.5" />
-                  )}
+                  <span className="sm:hidden">Ortu</span>
                 </div>
 
-                {/* Pratinjau Ruang Anak Khusus Akun Orang Tua */}
+                {/* Pratinjau Ruang Anak */}
                 <button
                   onClick={() => setIsPreviewingStudent(!isPreviewingStudent)}
                   title="Lihat tampilan aplikasi persis seperti yang dilihat anak"
-                  className="hidden md:flex items-center gap-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs px-2.5 py-1.5 rounded-xl shadow-2xs transition-all active:scale-95"
+                  className="hidden md:flex items-center gap-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs px-2 py-1.5 rounded-xl shadow-2xs transition-all active:scale-95"
                 >
                   <Eye className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>{isPreviewingStudent ? 'Kembali ke Dashboard' : 'Pratinjau Ruang Anak'}</span>
+                  <span>{isPreviewingStudent ? 'Dashboard' : 'Pratinjau'}</span>
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 bg-sky-100 text-sky-900 font-black text-xs px-2.5 py-1.5 rounded-xl border border-sky-300 shadow-2xs">
-                  <BookOpen className="w-3.5 h-3.5 text-sky-600" />
-                  <span className="hidden sm:inline">Ruang Siswa</span>
-                  <span className="sm:hidden">Siswa</span>
-                </div>
+              <div className="hidden sm:flex items-center gap-1 bg-sky-100 text-sky-900 font-black text-xs px-2.5 py-1.5 rounded-xl border border-sky-300 shadow-2xs">
+                <BookOpen className="w-3.5 h-3.5 text-sky-600" />
+                <span>Siswa</span>
               </div>
             )}
 
             {/* Login / Profile Avatar Pill */}
             {currentUser ? (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1">
                 <button
                   onClick={() => setIsSyncModalOpen(true)}
                   title={`Akun: ${currentUser.email} (${currentRole}) - Buka Pengaturan`}
@@ -400,7 +453,7 @@ export function App() {
                     window.location.reload();
                   }}
                   title="Keluar dari Akun"
-                  className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
+                  className="p-1 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                 </button>
@@ -408,7 +461,7 @@ export function App() {
             ) : (
               <button
                 onClick={() => setIsLoginModalOpen(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-3 py-1.5 rounded-xl shadow-chunky-emerald flex items-center gap-1.5 active:scale-95 transition-all"
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-2.5 sm:px-3 py-1.5 rounded-xl shadow-chunky-emerald flex items-center gap-1 active:scale-95 transition-all flex-shrink-0"
               >
                 <User className="w-3.5 h-3.5" />
                 <span>Masuk</span>
@@ -427,7 +480,7 @@ export function App() {
       )}
 
       {/* Main Content Body */}
-      <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
+      <main className="max-w-6xl mx-auto px-3 sm:px-4 pt-4 sm:pt-6 space-y-6 max-w-full overflow-x-hidden">
         {/* Showcase Banner Iklan & Demo Khusus Pengunjung Belum Login */}
         {!currentUser && (
           <GuestLandingHero
@@ -445,7 +498,7 @@ export function App() {
             <div className="bg-emerald-50/95 border-2 border-emerald-300/80 text-emerald-950 p-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs font-bold shadow-sm animate-fadeIn">
               <div className="flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping flex-shrink-0" />
-                <span>✨ Anda sedang mencoba <strong>Demo Interaktif MutabaahKu</strong> di perangkat ini. Coba ganti tab sholat atau isi mutaba'ah di bawah.</span>
+                <span>✨ Anda sedang mencoba <strong>Demo Interaktif MutabaahKu</strong> di perangkat ini. Coba dengarkan audio rekaman atau tes gerakan sholat.</span>
               </div>
               <button
                 onClick={() => setIsLoginModalOpen(true)}
@@ -462,7 +515,7 @@ export function App() {
             <div className="bg-amber-50 border-2 border-amber-300 text-amber-950 p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold shadow-sm animate-fadeIn">
               <div className="flex items-center gap-2">
                 <Eye className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                <span>Anda sedang melihat <strong>Pratinjau Ruang Belajar Anak</strong> (Hanya preview tampilan).</span>
+                <span>Anda sedang melihat <strong>Pratinjau Ruang Belajar Anak</strong> ({activeChild?.full_name}).</span>
               </div>
               <button
                 onClick={() => setIsPreviewingStudent(false)}
@@ -478,18 +531,18 @@ export function App() {
             <>
               {/* Mascot Greeting Strip */}
               <MascotCharacter
-                gender={studentProfile?.gender || 'PUTRA'}
-                message={`Assalamu'alaikum, ${studentProfile?.full_name || 'Hafiz'}! Yuk bersiap sholat tepat waktu dan muroja'ah hafalan Juz 30 hari ini!`}
-                actionText={`Ganti Mode Karakter (${studentProfile?.gender === 'PUTRA' ? 'Si Hafiz' : 'Si Hafizah'})`}
+                gender={activeChild?.gender || 'PUTRA'}
+                message={`Assalamu'alaikum, ${activeChild?.full_name || 'Hafiz'}! Yuk bersiap sholat tepat waktu dan muroja'ah hafalan Juz 30 hari ini!`}
+                actionText={`Ganti Mode Karakter (${activeChild?.gender === 'PUTRA' ? 'Si Hafiz' : 'Si Hafizah'})`}
                 onActionClick={handleToggleGender}
               />
 
               {/* Virtual Garden Widget */}
               <PahalaGarden
-                treeLevel={studentProfile?.garden_tree_level || 2}
-                waterDrops={studentProfile?.water_drops || 42}
-                starPoints={studentProfile?.star_points || 135}
-                unlockedStickers={studentProfile?.unlocked_stickers || ['sticker_welcome_star', 'sticker_kabah']}
+                treeLevel={activeChild?.garden_tree_level || 2}
+                waterDrops={activeChild?.water_drops || 42}
+                starPoints={activeChild?.star_points || 135}
+                unlockedStickers={activeChild?.unlocked_stickers || ['sticker_welcome_star', 'sticker_kabah']}
                 onWaterTree={handleWaterTree}
               />
 
@@ -546,7 +599,7 @@ export function App() {
               {/* Active Tab View */}
               {activeTab === 'SHOLAT' && (
                 <SholatAnimator
-                  gender={studentProfile?.gender || 'PUTRA'}
+                  gender={activeChild?.gender || 'PUTRA'}
                   onStepCompleted={handleStepCompleted}
                 />
               )}
@@ -555,15 +608,15 @@ export function App() {
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   <div className="lg:col-span-7">
                     <PrayerTimesCard
-                      cityId={studentProfile?.prayer_city_id}
-                      cityName={studentProfile?.prayer_city_name}
+                      cityId={activeChild?.prayer_city_id}
+                      cityName={activeChild?.prayer_city_name}
                     />
                   </div>
                   <div className="lg:col-span-5">
                     <QiblaCompass
-                      latitude={studentProfile?.latitude}
-                      longitude={studentProfile?.longitude}
-                      cityName={studentProfile?.prayer_city_name}
+                      latitude={activeChild?.latitude}
+                      longitude={activeChild?.longitude}
+                      cityName={activeChild?.prayer_city_name}
                     />
                   </div>
                 </div>
@@ -572,6 +625,7 @@ export function App() {
               {activeTab === 'MUROJAAH' && (
                 <MurojaahChecklist
                   checklists={checklists}
+                  currentStudentId={activeChild?.id}
                   onPassIncrement={handlePassIncrement}
                   onClaimReview={(id) => handlePassIncrement(id)}
                 />
@@ -585,12 +639,19 @@ export function App() {
               )}
             </>
           ) : (
-            /* PARENT DASHBOARD */
-            parentProfile && studentProfile && (
+            /* PARENT DASHBOARD DENGAN PEMBAGIAN ANAK-ANAK & REVIEW AUDIO HAFALAN */
+            parentProfile && (
               <ParentDashboard
                 parentProfile={parentProfile}
-                childProfile={studentProfile}
-                pendingChecklists={pendingChecklists}
+                childProfile={activeChild || studentProfile!}
+                allChildren={allChildren}
+                activeChildId={activeChild?.id || selectedChildId}
+                onSelectChild={(id) => setSelectedChildId(id)}
+                onAddChild={async (childData) => {
+                  const created = await addChildProfile(parentProfile.id, childData);
+                  setSelectedChildId(created.id);
+                }}
+                pendingChecklists={checklists.filter(c => c.parent_review_status === 'PENDING')}
                 pendingIbadahLog={todayIbadahLog || defaultIbadahLog}
                 onApproveChecklist={handleApproveChecklist}
                 onApproveIbadah={handleApproveIbadah}

@@ -19,21 +19,21 @@ interface GuestLandingHeroProps {
 
 export function GuestLandingHero({ onOpenLogin, onExploreDemo }: GuestLandingHeroProps) {
   return (
-    <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-800 text-white shadow-xl border-4 border-emerald-400/30 p-6 sm:p-8 mb-6">
+    <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-800 text-white shadow-xl border-2 sm:border-4 border-emerald-400/30 p-4 sm:p-8 mb-6 max-w-full">
       {/* Decorative Background Glows */}
       <div className="absolute top-0 right-0 -mt-10 -mr-10 w-72 h-72 bg-emerald-400/15 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-72 h-72 bg-amber-400/20 rounded-full blur-3xl pointer-events-none" />
 
       {/* Main Split Grid Hero */}
-      <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-center">
         {/* Left Column: Headline, Value Proposition & CTAs */}
-        <div className="lg:col-span-7 space-y-4 text-center lg:text-left">
-          <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-md px-3.5 py-1.5 rounded-full text-xs font-black text-amber-300 border border-white/25 shadow-inner">
-            <Sparkles className="w-4 h-4 fill-amber-300" />
-            <span>Aplikasi Hafalan & Sholat Sunnah Salaf Pertama untuk SDIT</span>
+        <div className="lg:col-span-7 space-y-3 sm:space-y-4 text-center lg:text-left">
+          <div className="inline-flex items-center gap-1.5 sm:gap-2 bg-white/20 backdrop-blur-md px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-black text-amber-300 border border-white/25 shadow-inner max-w-full">
+            <Sparkles className="w-3.5 h-3.5 fill-amber-300 flex-shrink-0" />
+            <span className="truncate">Aplikasi Hafalan & Sholat Sunnah Salaf untuk SDIT</span>
           </div>
 
-          <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight">
+          <h1 className="text-xl sm:text-3xl lg:text-4xl font-black tracking-tight text-white leading-snug sm:leading-tight break-words">
             Sahabat Ceria Menjaga Hafalan Qur'an & Menuntun Sholat Sesuai Sunnah Nabi ﷺ
           </h1>
 
@@ -42,26 +42,26 @@ export function GuestLandingHero({ onOpenLogin, onExploreDemo }: GuestLandingHer
           </p>
 
           {/* Quick Value Bullets */}
-          <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3 pt-1 text-xs text-emerald-100 font-semibold">
+          <div className="flex flex-wrap items-center justify-center lg:justify-start gap-2 sm:gap-3 pt-1 text-[11px] sm:text-xs text-emerald-100 font-semibold">
             <span className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-lg backdrop-blur-sm">
-              <Check className="w-3.5 h-3.5 text-amber-300" />
-              Sifat Shalat Nabi ﷺ (Al-Albani)
+              <Check className="w-3.5 h-3.5 text-amber-300 flex-shrink-0" />
+              <span>Sifat Shalat Nabi ﷺ (Al-Albani)</span>
             </span>
             <span className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-lg backdrop-blur-sm">
-              <Check className="w-3.5 h-3.5 text-amber-300" />
-              Zero-Manual-Typing Kurikulum SDIT
+              <Check className="w-3.5 h-3.5 text-amber-300 flex-shrink-0" />
+              <span>Zero-Manual-Typing SDIT</span>
             </span>
             <span className="flex items-center gap-1.5 bg-white/10 px-2.5 py-1 rounded-lg backdrop-blur-sm">
-              <Check className="w-3.5 h-3.5 text-amber-300" />
-              Paraf Digital Anti-Kecurangan
+              <Check className="w-3.5 h-3.5 text-amber-300 flex-shrink-0" />
+              <span>Paraf Digital & Rekaman Suara</span>
             </span>
           </div>
 
           {/* CTA Buttons */}
-          <div className="pt-3 flex flex-wrap items-center justify-center lg:justify-start gap-3">
+          <div className="pt-2 sm:pt-3 flex flex-col sm:flex-row items-stretch sm:items-center justify-center lg:justify-start gap-2.5 sm:gap-3">
             <button
               onClick={onOpenLogin}
-              className="py-3 px-6 rounded-2xl font-black text-xs sm:text-sm bg-amber-400 hover:bg-amber-300 text-amber-950 shadow-chunky-amber border border-amber-500/40 transition-all active:translate-y-1 flex items-center gap-2"
+              className="py-3 px-5 sm:px-6 rounded-2xl font-black text-xs sm:text-sm bg-amber-400 hover:bg-amber-300 text-amber-950 shadow-chunky-amber border border-amber-500/40 transition-all active:translate-y-1 flex items-center justify-center gap-2"
             >
               <span>Daftar / Masuk Akun Sekarang</span>
               <ArrowRight className="w-4 h-4" />
@@ -69,7 +69,7 @@ export function GuestLandingHero({ onOpenLogin, onExploreDemo }: GuestLandingHer
 
             <button
               onClick={onExploreDemo}
-              className="py-3 px-5 rounded-2xl font-bold text-xs sm:text-sm bg-white/15 hover:bg-white/25 text-white border border-white/30 backdrop-blur-sm transition-all active:scale-95 flex items-center gap-1.5"
+              className="py-3 px-4 sm:px-5 rounded-2xl font-bold text-xs sm:text-sm bg-white/15 hover:bg-white/25 text-white border border-white/30 backdrop-blur-sm transition-all active:scale-95 flex items-center justify-center gap-1.5"
             >
               <span>Coba Demo Interaktif di Bawah 👇</span>
             </button>

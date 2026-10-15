@@ -131,6 +131,11 @@ export interface MurojaahChecklist {
   latin_text?: string;
   translation?: string;
   source?: string;
+
+  // Fitur Rekaman Suara Setoran Hafalan Anak (Audio Recording Review)
+  audio_record_url?: string;
+  audio_duration?: number; // detik
+  recorded_at?: string;
 }
 
 export interface SyncQueueItem {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   CheckCircle2, 
   Circle, 
@@ -14,12 +14,18 @@ import {
   X,
   Plus,
   Trash2,
-  GraduationCap
+  GraduationCap,
+  Mic,
+  Square,
+  Play,
+  RotateCcw,
+  Check,
+  Headphones
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { MurojaahChecklist as ChecklistType, CurriculumCategory } from '../../types/database';
 import { SCHOOL_HADITHS, SchoolHadith } from '../../data/schoolHadiths';
-import { addCustomCurriculumItem, deleteCurriculumItem } from '../../lib/db';
+import { addCustomCurriculumItem, deleteCurriculumItem, saveHafalanAudioRecord } from '../../lib/db';
 
 interface MurojaahChecklistProps {
   checklists: ChecklistType[];
@@ -44,6 +50,17 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
   const [isBlindMode, setIsBlindMode] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+
+  // Audio Recording Modal State
+  const [recordingTargetItem, setRecordingTargetItem] = useState<ChecklistType | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const timerIntervalRef = useRef<any>(null);
 
   // Form State Tambah Hadis/Doa Baru
   const [formTitle, setFormTitle] = useState('');
@@ -78,6 +95,97 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
       await deleteCurriculumItem(id);
       if (onItemAdded) onItemAdded();
     }
+  };
+
+  // --- Voice Recorder Handlers ---
+  const startRecording = async () => {
+    setRecordingError(null);
+    setRecordedAudioUrl(null);
+    audioChunksRef.current = [];
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Perekam suara tidak didukung browser ini.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setRecordedAudioUrl(reader.result as string);
+        };
+        reader.readAsDataURL(audioBlob);
+
+        // Stop all audio tracks to free mic
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingSeconds(sec => sec + 1);
+      }, 1000);
+    } catch (err: any) {
+      console.warn('Microphone access failed:', err);
+      // Fallback: Generate a sample simulation audio for devices without mic hardware
+      setRecordingError('Mikrofon tidak terdeteksi atau izin belum diberikan. Anda dapat menggunakan audio contoh untuk uji coba.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+    }
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+    setIsRecording(false);
+  };
+
+  const cancelRecording = () => {
+    stopRecording();
+    setRecordedAudioUrl(null);
+    setRecordingTargetItem(null);
+  };
+
+  const handleUseSimulatedAudio = () => {
+    // Valid 1.2s talaqqi wave audio
+    const sampleAudio = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LFjV02DF2o3/PLm248Fz2W1e7NnW47GD2U1e/OoHE9Gz2R0+rJmHNAHDmP0ebEkmlCEjKGzN7Ah2FDEi+BzdzAfmFEEyuAy9m9fF9HECW7x9W2c1ZEECa0wNOxbFJDDSurvcqna08+DCelscSUZEI7ByOeqrmUYz47BSicrLiRYTo4BimfqbSOXzc3BCmfqa+IWzQ0BCigp62EWjA0AymdoauCVS0xACibnaaAViouACmanZ96UiUsACiZnJp3TyMm';
+    setRecordedAudioUrl(sampleAudio);
+    setRecordingSeconds(15);
+    setRecordingError(null);
+  };
+
+  const handleSaveAudioToItem = async () => {
+    if (!recordingTargetItem || !recordedAudioUrl) return;
+
+    await saveHafalanAudioRecord(
+      recordingTargetItem.id, 
+      recordedAudioUrl, 
+      Math.max(1, recordingSeconds)
+    );
+
+    confetti({
+      particleCount: 50,
+      spread: 60,
+      origin: { y: 0.6 }
+    });
+
+    setRecordingTargetItem(null);
+    setRecordedAudioUrl(null);
+    if (onItemAdded) onItemAdded();
   };
 
   const handleAddSubmit = async (e: React.FormEvent) => {
@@ -142,7 +250,7 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-4xl border-2 border-emerald-500/20 shadow-md p-5 sm:p-6">
+    <div className="bg-white rounded-4xl border-2 border-emerald-500/20 shadow-md p-4 sm:p-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
         <div>
@@ -238,7 +346,7 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="flex-1 min-w-[220px]">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
                         item.category === 'HADITH' 
                           ? 'bg-amber-100 text-amber-900 font-extrabold'
@@ -253,9 +361,11 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                         Kelas {item.grade_level || 3} SD
                       </span>
 
-                      {item.is_custom && (
-                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
-                          Tambahan Mandiri
+                      {/* Badge Indikator Rekaman Audio Suara Tersedia */}
+                      {item.audio_record_url && (
+                        <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1 shadow-2xs">
+                          <Mic className="w-3 h-3 text-amber-700" />
+                          <span>Ada Rekaman ({item.audio_duration || 15}d)</span>
                         </span>
                       )}
 
@@ -282,8 +392,15 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                       </p>
                     )}
 
+                    {/* Compact Audio Player if audio recorded */}
+                    {item.audio_record_url && (
+                      <div className="mt-2.5 max-w-xs">
+                        <audio controls src={item.audio_record_url} className="w-full h-8 rounded-lg" />
+                      </div>
+                    )}
+
                     {item.parent_notes && (
-                      <p className="text-xs text-slate-500 italic mt-0.5">
+                      <p className="text-xs text-slate-500 italic mt-1">
                         Catatan Orang Tua: "{item.parent_notes}"
                       </p>
                     )}
@@ -317,7 +434,20 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                     Progres: <span className="font-extrabold text-emerald-700">{item.completed_pass_count}</span> dari {item.target_pass_count}x Muroja'ah
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Tombol Rekam Suara Setoran Anak */}
+                    <button
+                      onClick={() => setRecordingTargetItem(item)}
+                      className={`btn-chunky py-1.5 px-3 text-xs flex items-center gap-1.5 transition-all ${
+                        item.audio_record_url 
+                          ? 'bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200' 
+                          : 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
+                      }`}
+                    >
+                      <Mic className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>{item.audio_record_url ? 'Rekam Ulang' : 'Rekam Suara'}</span>
+                    </button>
+
                     {/* Buka Kartu Pelajari Hafalan */}
                     <button
                       onClick={() => {
@@ -327,7 +457,7 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                       className="btn-chunky py-1.5 px-3 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl"
                     >
                       <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Pelajari & Latih Lafaz</span>
+                      <span>Pelajari</span>
                     </button>
 
                     <button
@@ -340,7 +470,7 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                       }`}
                     >
                       <Repeat className="w-3.5 h-3.5" />
-                      <span>{isCompletedTarget ? 'Target Selesai!' : '+1x Setoran'}</span>
+                      <span>{isCompletedTarget ? 'Selesai!' : '+1x'}</span>
                     </button>
 
                     {item.parent_review_status === 'PENDING' && (
@@ -368,6 +498,142 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
           })
         )}
       </div>
+
+      {/* MODAL PEREKAM SUARA SETORAN (Voice Audio Recording Modal) */}
+      {recordingTargetItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-4xl max-w-md w-full p-6 shadow-2xl relative border-2 border-emerald-500/30">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                  <Mic className="w-4 h-4 text-amber-700" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-800">
+                    Rekam Suara Setoran Hafalan
+                  </h3>
+                  <p className="text-xs text-slate-500 truncate max-w-[220px]">
+                    {recordingTargetItem.curriculum_title}
+                  </p>
+                </div>
+              </div>
+              <button onClick={cancelRecording} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Recite Helper Box */}
+            <div className="my-4 p-4 rounded-2xl bg-emerald-50/80 border border-emerald-200 text-center">
+              <span className="text-[10px] font-black uppercase text-emerald-800 block mb-1">
+                Lafazkan dengan Jelas & Tartil:
+              </span>
+              <p className="font-arabic text-lg text-emerald-950 font-bold leading-loose">
+                {recordingTargetItem.arabic_text || 'بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ'}
+              </p>
+            </div>
+
+            {/* Recording Controls */}
+            <div className="flex flex-col items-center justify-center py-4 space-y-4">
+              {/* Timer & Pulsing Wave Indicator */}
+              <div className="flex items-center gap-3">
+                <div className={`w-3.5 h-3.5 rounded-full ${isRecording ? 'bg-rose-500 animate-ping' : 'bg-slate-300'}`} />
+                <span className="font-mono text-2xl font-black text-slate-800">
+                  {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:
+                  {String(recordingSeconds % 60).padStart(2, '0')}
+                </span>
+              </div>
+
+              {/* Record / Stop Action Button */}
+              {!recordedAudioUrl ? (
+                isRecording ? (
+                  <button
+                    onClick={stopRecording}
+                    className="w-16 h-16 rounded-full bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center shadow-lg active:scale-95 transition-all"
+                  >
+                    <Square className="w-7 h-7 fill-white" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={startRecording}
+                    className="w-16 h-16 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shadow-chunky-emerald active:scale-95 transition-all"
+                  >
+                    <Mic className="w-8 h-8" />
+                  </button>
+                )
+              ) : (
+                /* Audio Preview Player */
+                <div className="w-full space-y-2">
+                  <div className="text-center text-xs font-bold text-emerald-700 flex items-center justify-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Rekaman Berhasil Disimpan ({recordingSeconds} detik)</span>
+                  </div>
+                  <audio controls src={recordedAudioUrl} className="w-full h-10 rounded-xl" />
+                </div>
+              )}
+
+              <p className="text-xs text-slate-500 text-center font-medium">
+                {isRecording 
+                  ? 'Sedang merekam suara... Bacakan hafalanmu sekarang lalu klik kotak merah jika selesai.' 
+                  : recordedAudioUrl 
+                  ? 'Dengarkan hasil rekamanmu di atas sebelum dikirim ke orang tua.'
+                  : 'Klik tombol mikrofon hijau untuk mulai merekam setoranmu.'}
+              </p>
+
+              {/* Error / Fallback Button */}
+              {recordingError && (
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900 text-center space-y-2">
+                  <p>{recordingError}</p>
+                  <button
+                    type="button"
+                    onClick={handleUseSimulatedAudio}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs"
+                  >
+                    Gunakan Rekaman Contoh (Simulasi)
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Bottom Buttons */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={cancelRecording}
+                className="btn-chunky-ghost py-2 px-3 text-xs"
+              >
+                Batal
+              </button>
+
+              <div className="flex items-center gap-2">
+                {recordedAudioUrl && (
+                  <button
+                    type="button"
+                    onClick={startRecording}
+                    className="btn-chunky py-2 px-3 text-xs bg-slate-100 text-slate-700 hover:bg-slate-200 flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Ulang</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={!recordedAudioUrl}
+                  onClick={handleSaveAudioToItem}
+                  className={`btn-chunky py-2 px-4 text-xs flex items-center gap-1.5 ${
+                    recordedAudioUrl 
+                      ? 'btn-chunky-emerald shadow-chunky-emerald' 
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Kirim Setoran ke Orang Tua</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Tambah Hadis / Doa Baru */}
       {showAddModal && (
@@ -558,7 +824,7 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                       }`}
                     >
                       {isBlindMode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      <span>{isBlindMode ? 'Buka Teks (Intip)' : 'Blind Mode (Uji Ingatan)'}</span>
+                      <span>{isBlindMode ? 'Buka Teks (Intip)' : 'Blind Mode'}</span>
                     </button>
 
                     <button
@@ -566,7 +832,7 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                       className="btn-chunky py-1.5 px-3 text-xs bg-emerald-600 text-white border-b-4 border-emerald-800 active:border-b-0"
                     >
                       <Volume2 className={`w-3.5 h-3.5 ${isSpeaking ? 'animate-pulse text-amber-300' : ''}`} />
-                      <span>{isSpeaking ? 'Membacakan...' : 'Dengarkan Pelafalan'}</span>
+                      <span>{isSpeaking ? 'Membacakan...' : 'Dengar Pelafalan'}</span>
                     </button>
                   </div>
 
@@ -602,6 +868,30 @@ export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
                     <span className="block text-[11px] font-bold text-amber-800 mt-1">
                       — Sumber: {source}
                     </span>
+                  </div>
+
+                  {/* Audio Recording Section Inside Modal */}
+                  <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center justify-between gap-3">
+                    <div className="text-xs">
+                      <span className="font-extrabold text-emerald-900 block">🎙️ Setoran Suara Anak:</span>
+                      <span className="text-[11px] text-emerald-700">
+                        {selectedItem.audio_record_url 
+                          ? `Tersedia rekaman (${selectedItem.audio_duration || 15} detik)` 
+                          : 'Belum ada rekaman suara untuk materi ini.'}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        const target = selectedItem;
+                        setSelectedItem(null);
+                        setRecordingTargetItem(target);
+                      }}
+                      className="btn-chunky py-1.5 px-3 text-xs bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1 shadow-sm"
+                    >
+                      <Mic className="w-3.5 h-3.5" />
+                      <span>{selectedItem.audio_record_url ? 'Rekam Ulang' : 'Mulai Rekam'}</span>
+                    </button>
                   </div>
 
                   {/* Action Inside Modal */}
