@@ -164,8 +164,21 @@ export function App() {
 
   // Dexie Live Queries
   const studentProfile = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').first());
-  const parentProfile = useLiveQuery(() => db.user_profiles.where('role').equals('PARENT').first());
-  const allChildren = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').toArray()) || [];
+  const parentProfile = useLiveQuery(async () => {
+    if (currentUser?.email) {
+      const byEmail = await db.user_profiles.where('email').equals(currentUser.email).first();
+      if (byEmail) return byEmail;
+    }
+    return db.user_profiles.where('role').equals('PARENT').first();
+  }, [currentUser?.email]);
+
+  const allChildren = useLiveQuery(async () => {
+    if (parentProfile?.id) {
+      const myKids = await db.user_profiles.where('parent_id').equals(parentProfile.id).toArray();
+      if (myKids.length > 0) return myKids;
+    }
+    return db.user_profiles.where('role').equals('STUDENT').toArray();
+  }, [parentProfile?.id]) || [];
   
   // Active child being monitored or practicing
   const activeChild = (allChildren.find(c => Boolean(c && c.id === selectedChildId)) || studentProfile || allChildren[0]) as UserProfile | undefined;
@@ -277,12 +290,26 @@ export function App() {
     }
   };
 
-  const handleApproveIbadah = async (logId: string, stars: number) => {
-    await db.ibadah_daily_logs.update(logId, {
-      parent_review_status: 'APPROVED',
-      reward_stars_awarded: stars,
-      reviewed_at: new Date().toISOString()
-    });
+  const handleApproveIbadah = async (logId: string, stars: number, notes?: string) => {
+    const existing = await db.ibadah_daily_logs.get(logId);
+    if (!existing) {
+      await db.ibadah_daily_logs.put({
+        ...defaultIbadahLog,
+        id: logId,
+        student_id: activeChild?.id || 'std-1',
+        parent_review_status: 'APPROVED',
+        reward_stars_awarded: stars,
+        parent_review_notes: notes || 'Alhamdulillah, sholat dan ibadahnya sangat tertib!',
+        reviewed_at: new Date().toISOString()
+      });
+    } else {
+      await db.ibadah_daily_logs.update(logId, {
+        parent_review_status: 'APPROVED',
+        reward_stars_awarded: stars,
+        parent_review_notes: notes || 'Alhamdulillah, sholat dan ibadahnya sangat tertib!',
+        reviewed_at: new Date().toISOString()
+      });
+    }
 
     if (activeChild) {
       await db.user_profiles.update(activeChild.id, {
@@ -650,6 +677,13 @@ export function App() {
                 onAddChild={async (childData) => {
                   const created = await addChildProfile(parentProfile.id, childData);
                   setSelectedChildId(created.id);
+                  if (supabase) {
+                    try {
+                      await supabase.from('user_profiles').upsert(created, { onConflict: 'id' });
+                    } catch (e) {
+                      console.warn('Gagal sync anak baru ke Supabase:', e);
+                    }
+                  }
                 }}
                 onDeleteChild={async (childId) => {
                   await deleteChildProfile(childId);
