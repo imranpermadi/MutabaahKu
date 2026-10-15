@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-amber-50/30 text-slate-800 font-sans antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Chunky 3D Button Utility */
+.btn-chunky {
+  @apply relative transition-all duration-150 active:translate-y-1 font-bold rounded-2xl px-5 py-3 select-none flex items-center justify-center gap-2;
+}
+
+.btn-chunky-emerald {
+  @apply btn-chunky bg-emerald-500 hover:bg-emerald-600 text-white border-b-4 border-emerald-700 active:border-b-0;
+}
+
+.btn-chunky-amber {
+  @apply btn-chunky bg-amber-400 hover:bg-amber-500 text-amber-950 border-b-4 border-amber-600 active:border-b-0;
+}
+
+.btn-chunky-sky {
+  @apply btn-chunky bg-sky-500 hover:bg-sky-600 text-white border-b-4 border-sky-700 active:border-b-0;
+}
+
+.btn-chunky-lavender {
+  @apply btn-chunky bg-purple-500 hover:bg-purple-600 text-white border-b-4 border-purple-700 active:border-b-0;
+}
+
+.btn-chunky-ghost {
+  @apply btn-chunky bg-white hover:bg-slate-50 text-slate-700 border-2 border-slate-200 border-b-4 border-b-slate-300 active:border-b-2;
+}
+
+/* Arabic Uthmani Text Enhancement */
+.font-arabic {
+  font-family: 'Amiri', 'Scheherazade New', serif;
+  line-height: 2.2;
+  word-spacing: 2px;
+}
