@@ -17,7 +17,7 @@ import {
   Download,
   X
 } from 'lucide-react';
-import { db, seedInitialData, addChildProfile } from './lib/db';
+import { db, seedInitialData, addChildProfile, deleteChildProfile } from './lib/db';
 import { syncOfflineQueueToSupabase, isSupabaseConfigured, supabase, executeFullSync } from './lib/supabase';
 import { UserRole, UserGender, UserProfile, IbadahDailyLog } from './types/database';
 import { MascotCharacter } from './components/mascot/MascotCharacter';
@@ -168,7 +168,7 @@ export function App() {
   const allChildren = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').toArray()) || [];
   
   // Active child being monitored or practicing
-  const activeChild = (allChildren.find(c => c.id === selectedChildId) || studentProfile || allChildren[0]) as UserProfile | undefined;
+  const activeChild = (allChildren.find(c => Boolean(c && c.id === selectedChildId)) || studentProfile || allChildren[0]) as UserProfile | undefined;
   
   const checklists = useLiveQuery(() => 
     db.murojaah_checklists.toArray()
@@ -643,13 +643,35 @@ export function App() {
             parentProfile && (
               <ParentDashboard
                 parentProfile={parentProfile}
-                childProfile={activeChild || studentProfile!}
+                childProfile={activeChild || studentProfile}
                 allChildren={allChildren}
                 activeChildId={activeChild?.id || selectedChildId}
                 onSelectChild={(id) => setSelectedChildId(id)}
                 onAddChild={async (childData) => {
                   const created = await addChildProfile(parentProfile.id, childData);
                   setSelectedChildId(created.id);
+                }}
+                onDeleteChild={async (childId) => {
+                  await deleteChildProfile(childId);
+                  if (supabase) {
+                    try {
+                      await supabase.from('murojaah_checklists').delete().eq('student_id', childId);
+                      await supabase.from('ibadah_daily_logs').delete().eq('student_id', childId);
+                      await supabase.from('academic_levels').delete().eq('student_id', childId);
+                      await supabase.from('exam_cycles').delete().eq('student_id', childId);
+                      await supabase.from('curriculum_items').delete().eq('student_id', childId);
+                      await supabase.from('sholat_learning_progress').delete().eq('student_id', childId);
+                      await supabase.from('fsrs_memory_states').delete().eq('student_id', childId);
+                      await supabase.from('mutabaah_logs').delete().eq('student_id', childId);
+                      await supabase.from('user_profiles').delete().eq('id', childId);
+                    } catch (remoteErr) {
+                      console.warn('Gagal menghapus relasi di remote Supabase:', remoteErr);
+                    }
+                  }
+                  const remaining = allChildren.filter(c => c.id !== childId);
+                  if (remaining.length > 0) {
+                    setSelectedChildId(remaining[0].id);
+                  }
                 }}
                 pendingChecklists={checklists.filter(c => c.parent_review_status === 'PENDING')}
                 pendingIbadahLog={todayIbadahLog || defaultIbadahLog}

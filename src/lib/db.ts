@@ -125,6 +125,19 @@ export async function addChildProfile(parentId: string, child: {
   return newProfile;
 }
 
+// Helper untuk menghapus profil anak beserta seluruh relasi data setorannya
+export async function deleteChildProfile(childId: string): Promise<void> {
+  await db.user_profiles.delete(childId);
+  await db.murojaah_checklists.where('student_id').equals(childId).delete();
+  await db.ibadah_daily_logs.where('student_id').equals(childId).delete();
+  await db.academic_levels.where('student_id').equals(childId).delete();
+  await db.exam_cycles.where('student_id').equals(childId).delete();
+  await db.curriculum_items.where('student_id').equals(childId).delete();
+  await db.sholat_learning_progress.where('student_id').equals(childId).delete();
+  await db.fsrs_memory_states.where('student_id').equals(childId).delete();
+  await db.mutabaah_logs.where('student_id').equals(childId).delete();
+}
+
 // Sample audio data URI (1.2 detik nada talaqqi Bismillah audio WAV valid)
 const SAMPLE_AUDIO_BISMILLAH = 'data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YVoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LFjV02DF2o3/PLm248Fz2W1e7NnW47GD2U1e/OoHE9Gz2R0+rJmHNAHDmP0ebEkmlCEjKGzN7Ah2FDEi+BzdzAfmFEEyuAy9m9fF9HECW7x9W2c1ZEECa0wNOxbFJDDSurvcqna08+DCelscSUZEI7ByOeqrmUYz47BSicrLiRYTo4BimfqbSOXzc3BCmfqa+IWzQ0BCigp62EWjA0AymdoauCVS0xACibnaaAViouACmanZ96UiUsACiZnJp3TyMm';
 

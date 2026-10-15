@@ -216,6 +216,18 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         await db.curriculum_items.bulkPut(curriculumItems);
         tableCounts['curriculum_items'] = curriculumItems.length;
         totalPulled += curriculumItems.length;
+
+        // Pull unit konten terkait curriculum items
+        const currItemIds = curriculumItems.map(c => c.id);
+        const { data: contentUnits } = await supabase
+          .from('content_units')
+          .select('*')
+          .in('curriculum_item_id', currItemIds);
+        if (contentUnits && contentUnits.length > 0) {
+          await db.content_units.bulkPut(contentUnits);
+          tableCounts['content_units'] = contentUnits.length;
+          totalPulled += contentUnits.length;
+        }
       }
 
       // 5. Ceklis Muroja'ah (murojaah_checklists)
@@ -327,26 +339,117 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
   try {
     // Langkah 1: Push antrean offline
     const pushQueueResult = await syncOfflineQueueToSupabase();
+    let totalPushed = pushQueueResult.synced;
 
-    // Langkah 2: Push snapshot lokal (upsert profil, ibadah hari ini, sholat progress)
+    // Langkah 2: Push snapshot lokal untuk seluruh 10 TABEL ke Supabase
+    // 1. Profil Pengguna
     const localProfiles = await db.user_profiles.toArray();
     if (localProfiles.length > 0) {
-      await supabase.from('user_profiles').upsert(localProfiles, { onConflict: 'id' });
+      try {
+        await supabase.from('user_profiles').upsert(localProfiles, { onConflict: 'id' });
+        totalPushed += localProfiles.length;
+      } catch (e: any) {
+        console.warn('Sync push user_profiles error:', e.message);
+      }
     }
 
-    const localIbadah = await db.ibadah_daily_logs.toArray();
-    if (localIbadah.length > 0) {
-      await supabase.from('ibadah_daily_logs').upsert(localIbadah, { onConflict: 'id' });
+    // 2. Tingkat Kelas Akademik
+    const localLevels = await db.academic_levels.toArray();
+    if (localLevels.length > 0) {
+      try {
+        await supabase.from('academic_levels').upsert(localLevels, { onConflict: 'id' });
+        totalPushed += localLevels.length;
+      } catch (e: any) {
+        console.warn('Sync push academic_levels error:', e.message);
+      }
     }
 
-    const localSholat = await db.sholat_learning_progress.toArray();
-    if (localSholat.length > 0) {
-      await supabase.from('sholat_learning_progress').upsert(localSholat, { onConflict: 'id' });
+    // 3. Siklus Ujian
+    const localCycles = await db.exam_cycles.toArray();
+    if (localCycles.length > 0) {
+      try {
+        await supabase.from('exam_cycles').upsert(localCycles, { onConflict: 'id' });
+        totalPushed += localCycles.length;
+      } catch (e: any) {
+        console.warn('Sync push exam_cycles error:', e.message);
+      }
     }
 
+    // 4. Item Kurikulum Hafalan
+    const localCurriculum = await db.curriculum_items.toArray();
+    if (localCurriculum.length > 0) {
+      try {
+        await supabase.from('curriculum_items').upsert(localCurriculum, { onConflict: 'id' });
+        totalPushed += localCurriculum.length;
+      } catch (e: any) {
+        console.warn('Sync push curriculum_items error:', e.message);
+      }
+    }
+
+    // 5. Unit Konten (Ayat & Matan)
+    const localUnits = await db.content_units.toArray();
+    if (localUnits.length > 0) {
+      try {
+        await supabase.from('content_units').upsert(localUnits, { onConflict: 'id' });
+        totalPushed += localUnits.length;
+      } catch (e: any) {
+        console.warn('Sync push content_units error:', e.message);
+      }
+    }
+
+    // 6. Ceklis Muroja'ah (termasuk rekaman suara & grade)
     const localChecklists = await db.murojaah_checklists.toArray();
     if (localChecklists.length > 0) {
-      await supabase.from('murojaah_checklists').upsert(localChecklists, { onConflict: 'id' });
+      try {
+        await supabase.from('murojaah_checklists').upsert(localChecklists, { onConflict: 'id' });
+        totalPushed += localChecklists.length;
+      } catch (e: any) {
+        console.warn('Sync push murojaah_checklists error:', e.message);
+      }
+    }
+
+    // 7. Catatan Ibadah Yaumiyah
+    const localIbadah = await db.ibadah_daily_logs.toArray();
+    if (localIbadah.length > 0) {
+      try {
+        await supabase.from('ibadah_daily_logs').upsert(localIbadah, { onConflict: 'id' });
+        totalPushed += localIbadah.length;
+      } catch (e: any) {
+        console.warn('Sync push ibadah_daily_logs error:', e.message);
+      }
+    }
+
+    // 8. Progres Belajar Sholat 13 Rukun
+    const localSholat = await db.sholat_learning_progress.toArray();
+    if (localSholat.length > 0) {
+      try {
+        await supabase.from('sholat_learning_progress').upsert(localSholat, { onConflict: 'id' });
+        totalPushed += localSholat.length;
+      } catch (e: any) {
+        console.warn('Sync push sholat_learning_progress error:', e.message);
+      }
+    }
+
+    // 9. State Memori FSRS-6
+    const localFsrs = await db.fsrs_memory_states.toArray();
+    if (localFsrs.length > 0) {
+      try {
+        await supabase.from('fsrs_memory_states').upsert(localFsrs, { onConflict: 'id' });
+        totalPushed += localFsrs.length;
+      } catch (e: any) {
+        console.warn('Sync push fsrs_memory_states error:', e.message);
+      }
+    }
+
+    // 10. Log Setoran Ujian
+    const localLogs = await db.mutabaah_logs.toArray();
+    if (localLogs.length > 0) {
+      try {
+        await supabase.from('mutabaah_logs').upsert(localLogs, { onConflict: 'id' });
+        totalPushed += localLogs.length;
+      } catch (e: any) {
+        console.warn('Sync push mutabaah_logs error:', e.message);
+      }
     }
 
     // Langkah 3: Pull data dari Cloud ke Lokal
@@ -357,7 +460,7 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
 
     return {
       success: true,
-      pushed: pushQueueResult.synced + localProfiles.length + localIbadah.length,
+      pushed: totalPushed,
       pulled: pullResult.pulledCount,
       tables: pullResult.tables,
       timestamp

@@ -21,7 +21,8 @@ import {
   Calendar,
   Award,
   Check,
-  FileText
+  FileText,
+  GraduationCap
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { db, seedInitialData } from '../../lib/db';
@@ -249,6 +250,22 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         translation: '',
         source: 'Hadis Shahih'
       };
+    } else if (activeTable === 'academic_levels') {
+      defaults = {
+        student_id: defaultStudent?.id || '',
+        grade_level: 1,
+        academic_year: '2025/2026',
+        is_active: true
+      };
+    } else if (activeTable === 'exam_cycles') {
+      defaults = {
+        student_id: defaultStudent?.id || '',
+        level_id: 'level-grade-1',
+        exam_type: 'PTS_1',
+        exam_title: 'Ujian Tengah Semester (PTS) Ganjil',
+        exam_date: new Date().toISOString().split('T')[0],
+        target_retention: 0.90
+      };
     } else if (activeTable === 'curriculum_items') {
       defaults = {
         student_id: defaultStudent?.id || '',
@@ -277,7 +294,40 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         sholat_isya: 'BERJAMAAH',
         puasa_type: 'TIDAK_PUASA',
         parent_review_status: 'PENDING',
-        reward_stars_awarded: 0
+        reward_stars_awarded: 0,
+        child_notes: ''
+      };
+    } else if (activeTable === 'sholat_learning_progress') {
+      defaults = {
+        student_id: defaultStudent?.id || '',
+        step_code: 'RUKUN_01_NIAT',
+        step_order: 1,
+        animation_practiced_count: 1,
+        reading_memorized: false,
+        quiz_high_score: 100,
+        parent_verified_movement: false,
+        parent_verified_reading: false,
+        parent_notes: ''
+      };
+    } else if (activeTable === 'fsrs_memory_states') {
+      defaults = {
+        student_id: defaultStudent?.id || '',
+        unit_id: 'unit-an-naba-01',
+        track_type: 'SABAQ',
+        difficulty: 4.0,
+        stability: 2.5,
+        retrievability: 0.95,
+        next_due: new Date(Date.now() + 86400000).toISOString().split('T')[0]
+      };
+    } else if (activeTable === 'mutabaah_logs') {
+      defaults = {
+        student_id: defaultStudent?.id || '',
+        logged_by_role: 'PARENT',
+        official_mutabaah_status: 'L',
+        fsrs_rating: 3,
+        parent_verified: true,
+        tajwid_makhraj_notes: 'Makhraj huruf & tajwid mutqin',
+        created_at: new Date().toISOString()
       };
     } else {
       defaults = {
@@ -546,11 +596,60 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                       </>
                     )}
 
-                    {['academic_levels', 'exam_cycles', 'sholat_learning_progress', 'fsrs_memory_states', 'mutabaah_logs'].includes(activeTable) && (
+                    {activeTable === 'academic_levels' && (
                       <>
-                        <th className="py-3 px-4">ID</th>
+                        <th className="py-3 px-4">Tingkat Kelas SD</th>
                         <th className="py-3 px-4">Email Siswa Terkait</th>
-                        <th className="py-3 px-4">Ringkasan Field Data</th>
+                        <th className="py-3 px-4">Tahun Akademik</th>
+                        <th className="py-3 px-4">Status Aktif</th>
+                        <th className="py-3 px-4 text-right">Aksi</th>
+                      </>
+                    )}
+
+                    {activeTable === 'exam_cycles' && (
+                      <>
+                        <th className="py-3 px-4">Judul Siklus Ujian</th>
+                        <th className="py-3 px-4">Email Siswa Terkait</th>
+                        <th className="py-3 px-4">Tipe Ujian</th>
+                        <th className="py-3 px-4">Target Retensi %</th>
+                        <th className="py-3 px-4">Tanggal Ujian</th>
+                        <th className="py-3 px-4 text-right">Aksi</th>
+                      </>
+                    )}
+
+                    {activeTable === 'sholat_learning_progress' && (
+                      <>
+                        <th className="py-3 px-4">Rukun Sholat (13 Rukun)</th>
+                        <th className="py-3 px-4">Email Siswa Terkait</th>
+                        <th className="py-3 px-4">Kali Latihan</th>
+                        <th className="py-3 px-4">Hafal Bacaan</th>
+                        <th className="py-3 px-4">Skor Kuis</th>
+                        <th className="py-3 px-4">Verifikasi Ortu</th>
+                        <th className="py-3 px-4 text-right">Aksi</th>
+                      </>
+                    )}
+
+                    {activeTable === 'fsrs_memory_states' && (
+                      <>
+                        <th className="py-3 px-4">Unit / Materi ID</th>
+                        <th className="py-3 px-4">Email Siswa Terkait</th>
+                        <th className="py-3 px-4">Track Memori</th>
+                        <th className="py-3 px-4">Stabilitas (Hari)</th>
+                        <th className="py-3 px-4">Retensi %</th>
+                        <th className="py-3 px-4">Jadwal Ulang (Due)</th>
+                        <th className="py-3 px-4 text-right">Aksi</th>
+                      </>
+                    )}
+
+                    {activeTable === 'mutabaah_logs' && (
+                      <>
+                        <th className="py-3 px-4">Waktu Setoran</th>
+                        <th className="py-3 px-4">Email Siswa Terkait</th>
+                        <th className="py-3 px-4">Penginput</th>
+                        <th className="py-3 px-4">Nilai Mutaba'ah</th>
+                        <th className="py-3 px-4">Rating FSRS</th>
+                        <th className="py-3 px-4">Status Validasi</th>
+                        <th className="py-3 px-4">Catatan Tajwid</th>
                         <th className="py-3 px-4 text-right">Aksi</th>
                       </>
                     )}
@@ -709,20 +808,171 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 6. OTHER TABLES ROW */}
-                        {['academic_levels', 'exam_cycles', 'sholat_learning_progress', 'fsrs_memory_states', 'mutabaah_logs'].includes(activeTable) && (
+                        {/* 6. ACADEMIC LEVELS ROW */}
+                        {activeTable === 'academic_levels' && (
                           <>
-                            <td className="py-3 px-4 font-mono font-bold text-emerald-400 truncate max-w-[120px]">
-                              {rec.id}
+                            <td className="py-3 px-4 font-bold text-white flex items-center gap-2">
+                              <GraduationCap className="w-4 h-4 text-emerald-400" />
+                              <span>Kelas {rec.grade_level} SD</span>
                             </td>
                             <td className="py-3 px-4">
                               <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-sky-950/80 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-lg">
                                 <Mail className="w-3 h-3 text-sky-400" />
-                                {linkedUser?.email || rec.student_id || '-'}
+                                {linkedUser?.email || rec.student_id}
                               </span>
                             </td>
-                            <td className="py-3 px-4 text-slate-300 max-w-md truncate font-sans">
-                              {rec.title || rec.exam_title || rec.step_code || rec.unit_id || JSON.stringify(rec).slice(0, 80)}
+                            <td className="py-3 px-4 text-slate-300 font-mono font-semibold">
+                              {rec.academic_year || '2025/2026'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                rec.is_active ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
+                              }`}>
+                                {rec.is_active ? '✅ Aktif' : 'Non-Aktif'}
+                              </span>
+                            </td>
+                          </>
+                        )}
+
+                        {/* 7. EXAM CYCLES ROW */}
+                        {activeTable === 'exam_cycles' && (
+                          <>
+                            <td className="py-3 px-4 font-bold text-white">
+                              <div className="flex items-center gap-2">
+                                <Calendar className="w-4 h-4 text-amber-400" />
+                                <span>{rec.exam_title}</span>
+                              </div>
+                              <span className="block text-[10px] text-slate-500 font-mono">{rec.id}</span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-sky-950/80 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-lg">
+                                <Mail className="w-3 h-3 text-sky-400" />
+                                {linkedUser?.email || rec.student_id}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-purple-900/60 text-purple-300 border border-purple-500/30">
+                                {rec.exam_type}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono font-bold text-emerald-400">
+                              {Math.round((rec.target_retention || 0.90) * 100)}%
+                            </td>
+                            <td className="py-3 px-4 font-mono text-slate-300">
+                              {rec.exam_date || '-'}
+                            </td>
+                          </>
+                        )}
+
+                        {/* 8. SHOLAT LEARNING PROGRESS ROW */}
+                        {activeTable === 'sholat_learning_progress' && (
+                          <>
+                            <td className="py-3 px-4 font-bold text-white">
+                              <div className="flex items-center gap-2">
+                                <Sparkles className="w-4 h-4 text-emerald-400" />
+                                <span>{rec.step_code?.replace(/_/g, ' ')}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-500 font-mono">Urutan #{rec.step_order || 1}</span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-sky-950/80 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-lg">
+                                <Mail className="w-3 h-3 text-sky-400" />
+                                {linkedUser?.email || rec.student_id}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono font-bold text-emerald-400">
+                              {rec.animation_practiced_count || 0}x Latihan
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                rec.reading_memorized ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-400'
+                              }`}>
+                                {rec.reading_memorized ? '✅ Hafal' : '⏳ Belum'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono font-bold text-amber-300">
+                              ⭐ {rec.quiz_high_score || 0}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                rec.parent_verified_movement ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'
+                              }`}>
+                                {rec.parent_verified_movement ? '✅ Valid' : '⏳ Pending'}
+                              </span>
+                            </td>
+                          </>
+                        )}
+
+                        {/* 9. FSRS MEMORY STATES ROW */}
+                        {activeTable === 'fsrs_memory_states' && (
+                          <>
+                            <td className="py-3 px-4 font-bold font-mono text-emerald-300">
+                              {rec.unit_id}
+                              <span className="block text-[10px] text-slate-500 font-sans">ID: {rec.id}</span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-sky-950/80 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-lg">
+                                <Mail className="w-3 h-3 text-sky-400" />
+                                {linkedUser?.email || rec.student_id}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                rec.track_type === 'SABAQ' ? 'bg-amber-900/60 text-amber-300 border border-amber-500/30' :
+                                rec.track_type === 'SABQI' ? 'bg-sky-900/60 text-sky-300 border border-sky-500/30' :
+                                'bg-emerald-900/60 text-emerald-300 border border-emerald-500/30'
+                              }`}>
+                                {rec.track_type}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono text-slate-300">
+                              {rec.stability ? `${rec.stability} hari` : '2 hari'}
+                            </td>
+                            <td className="py-3 px-4 font-mono font-bold text-emerald-400">
+                              {Math.round((rec.retrievability || 1) * 100)}%
+                            </td>
+                            <td className="py-3 px-4 font-mono text-slate-300">
+                              {rec.next_due ? rec.next_due.slice(0, 10) : '-'}
+                            </td>
+                          </>
+                        )}
+
+                        {/* 10. MUTABAAH LOGS ROW */}
+                        {activeTable === 'mutabaah_logs' && (
+                          <>
+                            <td className="py-3 px-4 font-mono text-slate-300">
+                              {rec.created_at ? new Date(rec.created_at).toLocaleDateString('id-ID') : '-'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-sky-950/80 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-lg">
+                                <Mail className="w-3 h-3 text-sky-400" />
+                                {linkedUser?.email || rec.student_id}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                                {rec.logged_by_role}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                rec.official_mutabaah_status === 'L' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'
+                              }`}>
+                                {rec.official_mutabaah_status === 'L' ? 'Lancar (L)' : 'Belum Lancar (BL)'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-mono text-amber-300 font-bold">
+                              FSRS: {rec.fsrs_rating || 3}/4
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                rec.parent_verified ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-400'
+                              }`}>
+                                {rec.parent_verified ? '✅ Terverifikasi' : '⏳ Pending'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-slate-400 max-w-xs truncate text-[11px]">
+                              {rec.tajwid_makhraj_notes || '-'}
                             </td>
                           </>
                         )}
@@ -1070,11 +1320,11 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                 </>
               )}
 
-              {/* 5. GENERIC FORM FOR OTHER TABLES */}
-              {!['user_profiles', 'murojaah_checklists', 'curriculum_items', 'content_units'].includes(activeTable) && (
+              {/* 5. ACADEMIC LEVELS FORM */}
+              {activeTable === 'academic_levels' && (
                 <>
                   <div>
-                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email)</label>
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
                     <select
                       value={formData.student_id || ''}
                       onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
@@ -1087,17 +1337,494 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                       ))}
                     </select>
                   </div>
-                  {Object.keys(formData).filter(k => !['id', 'created_at', 'updated_at', 'student_id'].includes(k)).map(key => (
-                    <div key={key}>
-                      <label className="font-bold text-slate-400 block mb-1 capitalize font-mono text-[11px]">{key}</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Tingkat Kelas SD *</label>
+                      <select
+                        value={formData.grade_level || 1}
+                        onChange={(e) => setFormData({ ...formData, grade_level: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        {[1, 2, 3, 4, 5, 6].map(g => (
+                          <option key={g} value={g}>Kelas {g} SD</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Tahun Akademik *</label>
                       <input
                         type="text"
-                        value={typeof formData[key] === 'object' ? JSON.stringify(formData[key]) : (formData[key] ?? '')}
-                        onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
-                        className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-xs"
+                        required
+                        placeholder="2025/2026"
+                        value={formData.academic_year || '2025/2026'}
+                        onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
                       />
                     </div>
-                  ))}
+                  </div>
+                  <div className="flex items-center gap-2 pt-2">
+                    <input
+                      type="checkbox"
+                      id="is_active_level"
+                      checked={formData.is_active ?? true}
+                      onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
+                      className="w-4 h-4 rounded text-emerald-600"
+                    />
+                    <label htmlFor="is_active_level" className="font-bold text-slate-300">Tingkat Kelas Aktif Saat Ini</label>
+                  </div>
+                </>
+              )}
+
+              {/* 6. EXAM CYCLES FORM */}
+              {activeTable === 'exam_cycles' && (
+                <>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Judul Siklus Ujian *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Contoh: Ujian Tengah Semester (PTS) Ganjil"
+                      value={formData.exam_title || ''}
+                      onChange={(e) => setFormData({ ...formData, exam_title: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
+                    <select
+                      value={formData.student_id || ''}
+                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
+                    >
+                      {userProfiles.map(u => (
+                        <option key={u.id} value={u.id}>
+                          {u.full_name} ({u.email || u.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Tipe Ujian *</label>
+                      <select
+                        value={formData.exam_type || 'PTS_1'}
+                        onChange={(e) => setFormData({ ...formData, exam_type: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="PTS_1">PTS 1 (Penilaian Tengah Semester 1)</option>
+                        <option value="MID_1">MID 1</option>
+                        <option value="PAS_1">PAS 1 (Penilaian Akhir Semester 1)</option>
+                        <option value="PTS_2">PTS 2 (Penilaian Tengah Semester 2)</option>
+                        <option value="MID_2">MID 2</option>
+                        <option value="PAS_2">PAS 2 (Penilaian Akhir Semester 2)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Target Retensi (%)</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0.5"
+                        max="1.0"
+                        value={formData.target_retention || 0.90}
+                        onChange={(e) => setFormData({ ...formData, target_retention: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Tanggal Pelaksanaan Ujian</label>
+                    <input
+                      type="date"
+                      value={formData.exam_date || ''}
+                      onChange={(e) => setFormData({ ...formData, exam_date: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* 7. IBADAH DAILY LOGS FORM */}
+              {activeTable === 'ibadah_daily_logs' && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Tanggal Catatan *</label>
+                      <input
+                        type="date"
+                        required
+                        value={formData.log_date || new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setFormData({ ...formData, log_date: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
+                      <select
+                        value={formData.student_id || ''}
+                        onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
+                      >
+                        {userProfiles.map(u => (
+                          <option key={u.id} value={u.id}>
+                            {u.full_name} ({u.email || u.id})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Status Sholat 5 Waktu</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {(['sholat_subuh', 'sholat_dzuhur', 'sholat_ashar', 'sholat_maghrib', 'sholat_isya'] as const).map(waktu => (
+                        <div key={waktu}>
+                          <label className="text-[10px] font-bold text-slate-400 capitalize block mb-0.5">
+                            {waktu.replace('sholat_', '')}
+                          </label>
+                          <select
+                            value={formData[waktu] || 'BERJAMAAH'}
+                            onChange={(e) => setFormData({ ...formData, [waktu]: e.target.value })}
+                            className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-[11px]"
+                          >
+                            <option value="BERJAMAAH">Berjamaah</option>
+                            <option value="MUNFARID_TEPAT">Munfarid Tepat</option>
+                            <option value="TERLAMBAT">Terlambat</option>
+                            <option value="TIDAK_SHOLAT">Tidak Sholat</option>
+                            <option value="UZUR">Uzur Syar'i</option>
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Ibadah Puasa</label>
+                      <select
+                        value={formData.puasa_type || 'TIDAK_PUASA'}
+                        onChange={(e) => setFormData({ ...formData, puasa_type: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="TIDAK_PUASA">Tidak Puasa</option>
+                        <option value="SENIN_KAMIS">Puasa Senin-Kamis</option>
+                        <option value="AYYAMUL_BIDH">Puasa Ayyamul Bidh</option>
+                        <option value="RAMADHAN">Puasa Ramadhan</option>
+                        <option value="SUNNAH_LAINNYA">Sunnah Lainnya</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Status Paraf Orang Tua</label>
+                      <select
+                        value={formData.parent_review_status || 'PENDING'}
+                        onChange={(e) => setFormData({ ...formData, parent_review_status: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="PENDING">Menunggu Paraf (PENDING)</option>
+                        <option value="APPROVED">Disetujui / Diparaf (APPROVED)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Bintang Pahala Diberikan</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={formData.reward_stars_awarded || 0}
+                        onChange={(e) => setFormData({ ...formData, reward_stars_awarded: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Catatan Anak</label>
+                      <input
+                        type="text"
+                        placeholder="Alhamdulillah tertib sholat"
+                        value={formData.child_notes || ''}
+                        onChange={(e) => setFormData({ ...formData, child_notes: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 8. SHOLAT LEARNING PROGRESS FORM */}
+              {activeTable === 'sholat_learning_progress' && (
+                <>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
+                    <select
+                      value={formData.student_id || ''}
+                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
+                    >
+                      {userProfiles.map(u => (
+                        <option key={u.id} value={u.id}>
+                          {u.full_name} ({u.email || u.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Kode Rukun Sholat *</label>
+                      <select
+                        value={formData.step_code || 'RUKUN_01_NIAT'}
+                        onChange={(e) => setFormData({ ...formData, step_code: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="RUKUN_01_NIAT">1. Niat & Berdiri Tegak</option>
+                        <option value="RUKUN_02_TAKBIRATUL_IHRAM">2. Takbiratul Ihram</option>
+                        <option value="RUKUN_03_SEDEKAP_IFTITAH">3. Sedekap & Doa Iftitah</option>
+                        <option value="RUKUN_04_AL_FATIHAH">4. Membaca Al-Fatihah</option>
+                        <option value="RUKUN_05_RUKU">5. Ruku' & Thuma'ninah</option>
+                        <option value="RUKUN_06_ITIDAL">6. I'tidal & Doa</option>
+                        <option value="RUKUN_07_SUJUD">7. Sujud 7 Anggota Tubuh</option>
+                        <option value="RUKUN_08_DUDUK_ANTARA_SUJUD">8. Duduk Antara Dua Sujud</option>
+                        <option value="RUKUN_09_TASYAHHUD_AWAL">9. Tasyahhud Awal</option>
+                        <option value="RUKUN_10_TASYAHHUD_AKHIR">10. Tasyahhud Akhir</option>
+                        <option value="RUKUN_11_SHOLAWAT_NABI">11. Sholawat Atas Nabi</option>
+                        <option value="RUKUN_12_SALAM">12. Salam ke Kanan & Kiri</option>
+                        <option value="RUKUN_13_TERTIB">13. Tertib Seluruh Rukun</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Urutan Langkah</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={13}
+                        value={formData.step_order || 1}
+                        onChange={(e) => setFormData({ ...formData, step_order: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Jumlah Kali Latihan</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={formData.animation_practiced_count || 0}
+                        onChange={(e) => setFormData({ ...formData, animation_practiced_count: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Skor Kuis Sholat (0-100)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={formData.quiz_high_score || 0}
+                        onChange={(e) => setFormData({ ...formData, quiz_high_score: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="reading_memorized"
+                        checked={formData.reading_memorized || false}
+                        onChange={(e) => setFormData({ ...formData, reading_memorized: e.target.checked })}
+                        className="w-4 h-4 rounded text-emerald-600"
+                      />
+                      <label htmlFor="reading_memorized" className="font-bold text-slate-300">Bacaan Sudah Dihafal</label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="parent_verified_movement"
+                        checked={formData.parent_verified_movement || false}
+                        onChange={(e) => setFormData({ ...formData, parent_verified_movement: e.target.checked, parent_verified_reading: e.target.checked })}
+                        className="w-4 h-4 rounded text-emerald-600"
+                      />
+                      <label htmlFor="parent_verified_movement" className="font-bold text-slate-300">Verifikasi Sah dari Orang Tua</label>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Catatan Orang Tua</label>
+                    <input
+                      type="text"
+                      placeholder="Gerakan tegak lurus sempurna"
+                      value={formData.parent_notes || ''}
+                      onChange={(e) => setFormData({ ...formData, parent_notes: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* 9. FSRS MEMORY STATES FORM */}
+              {activeTable === 'fsrs_memory_states' && (
+                <>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
+                    <select
+                      value={formData.student_id || ''}
+                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
+                    >
+                      {userProfiles.map(u => (
+                        <option key={u.id} value={u.id}>
+                          {u.full_name} ({u.email || u.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Unit / Materi ID *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="unit-an-naba-01"
+                        value={formData.unit_id || ''}
+                        onChange={(e) => setFormData({ ...formData, unit_id: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Track Memori *</label>
+                      <select
+                        value={formData.track_type || 'SABAQ'}
+                        onChange={(e) => setFormData({ ...formData, track_type: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="SABAQ">SABAQ (Hafalan Baru)</option>
+                        <option value="SABQI">SABQI (Muroja'ah Dekat)</option>
+                        <option value="MANZIL">MANZIL (Muroja'ah Jauh)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Stabilitas (Hari)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={formData.stability || 2.5}
+                        onChange={(e) => setFormData({ ...formData, stability: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Kesulitan (1-10)</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="10"
+                        value={formData.difficulty || 4.0}
+                        onChange={(e) => setFormData({ ...formData, difficulty: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Retensi (0-1.0)</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={formData.retrievability || 0.95}
+                        onChange={(e) => setFormData({ ...formData, retrievability: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Jadwal Muroja'ah Ulang (Next Due)</label>
+                    <input
+                      type="date"
+                      value={formData.next_due ? formData.next_due.slice(0, 10) : ''}
+                      onChange={(e) => setFormData({ ...formData, next_due: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* 10. MUTABAAH LOGS FORM */}
+              {activeTable === 'mutabaah_logs' && (
+                <>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
+                    <select
+                      value={formData.student_id || ''}
+                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
+                    >
+                      {userProfiles.map(u => (
+                        <option key={u.id} value={u.id}>
+                          {u.full_name} ({u.email || u.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Penginput *</label>
+                      <select
+                        value={formData.logged_by_role || 'PARENT'}
+                        onChange={(e) => setFormData({ ...formData, logged_by_role: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="PARENT">Orang Tua (PARENT)</option>
+                        <option value="STUDENT">Siswa Sendiri (STUDENT)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Nilai Mutaba'ah</label>
+                      <select
+                        value={formData.official_mutabaah_status || 'L'}
+                        onChange={(e) => setFormData({ ...formData, official_mutabaah_status: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value="L">Lancar (L)</option>
+                        <option value="BL">Belum Lancar (BL)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Rating FSRS</label>
+                      <select
+                        value={formData.fsrs_rating || 3}
+                        onChange={(e) => setFormData({ ...formData, fsrs_rating: Number(e.target.value) })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
+                      >
+                        <option value={1}>1 - Ulangi (Again)</option>
+                        <option value={2}>2 - Sulit (Hard)</option>
+                        <option value={3}>3 - Bagus (Good)</option>
+                        <option value={4}>4 - Mudah (Easy)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 pt-2">
+                    <input
+                      type="checkbox"
+                      id="parent_verified_log"
+                      checked={formData.parent_verified ?? true}
+                      onChange={(e) => setFormData({ ...formData, parent_verified: e.target.checked })}
+                      className="w-4 h-4 rounded text-emerald-600"
+                    />
+                    <label htmlFor="parent_verified_log" className="font-bold text-slate-300">Telah Diverifikasi Valid oleh Orang Tua / Ustadz</label>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-300 block mb-1">Catatan Tajwid & Makhraj</label>
+                    <input
+                      type="text"
+                      placeholder="Ghunnah dan mad thobi'i sudah mutqin"
+                      value={formData.tajwid_makhraj_notes || ''}
+                      onChange={(e) => setFormData({ ...formData, tajwid_makhraj_notes: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                    />
+                  </div>
                 </>
               )}
 

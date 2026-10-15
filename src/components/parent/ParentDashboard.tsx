@@ -19,7 +19,8 @@ import {
   ShieldCheck,
   Flame,
   Star,
-  Users
+  Users,
+  Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import jsPDF from 'jspdf';
@@ -28,7 +29,7 @@ import { MurojaahChecklist, IbadahDailyLog, UserProfile, UserGender } from '../.
 
 interface ParentDashboardProps {
   parentProfile: UserProfile;
-  childProfile: UserProfile;
+  childProfile?: UserProfile;
   allChildren?: UserProfile[];
   activeChildId?: string;
   onSelectChild?: (childId: string) => void;
@@ -39,6 +40,7 @@ interface ParentDashboardProps {
     grade: number;
     schoolName: string;
   }) => Promise<void>;
+  onDeleteChild?: (childId: string) => Promise<void>;
   pendingChecklists: MurojaahChecklist[];
   pendingIbadahLog?: IbadahDailyLog;
   onApproveChecklist: (checklistId: string, grade: 'L' | 'BL', notes: string) => void;
@@ -52,6 +54,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   activeChildId,
   onSelectChild,
   onAddChild,
+  onDeleteChild,
   pendingChecklists,
   pendingIbadahLog,
   onApproveChecklist,
@@ -59,6 +62,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 }) => {
   const [notesInput, setNotesInput] = useState<{ [id: string]: string }>({});
   const [showAddChildModal, setShowAddChildModal] = useState(false);
+  const [childToDelete, setChildToDelete] = useState<UserProfile | null>(null);
+  const [isDeletingChild, setIsDeletingChild] = useState(false);
 
   // Form State Tambah Anak
   const [newChildName, setNewChildName] = useState('');
@@ -68,11 +73,39 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [newChildSchool, setNewChildSchool] = useState('SDIT Imam Bukhari');
   const [isSubmittingChild, setIsSubmittingChild] = useState(false);
 
-  const effectiveChildren = allChildren.length > 0 ? allChildren : [childProfile];
-  const currentChild = effectiveChildren.find(c => c.id === (activeChildId || childProfile.id)) || childProfile;
+  // Filter profil anak yang valid (mencegah error 'c is undefined')
+  const validChildren = (allChildren || []).filter((c): c is UserProfile => Boolean(c && c.id));
+  if (childProfile && childProfile.id && !validChildren.some(c => c.id === childProfile.id)) {
+    validChildren.unshift(childProfile);
+  }
+
+  // Profil fallback jika database santri sedang dimuat atau belum ada anak terdaftar
+  const defaultFallbackChild: UserProfile = {
+    id: 'demo-hafiz',
+    full_name: 'Muhammad Hafiz',
+    email: 'hafiz@mutabaahku.id',
+    role: 'STUDENT',
+    gender: 'PUTRA',
+    current_grade: 3,
+    school_name: 'SDIT Imam Bukhari',
+    prayer_city_id: '58a2fc6ed39fd083f55d4182bf88826d',
+    prayer_city_name: 'KOTA MEDAN',
+    latitude: 3.5952,
+    longitude: 98.6722,
+    qibla_bearing: 292.8,
+    daily_streak: 1,
+    star_points: 0,
+    water_drops: 0,
+    garden_tree_level: 1,
+    unlocked_stickers: []
+  };
+
+  const effectiveChildren = validChildren.length > 0 ? validChildren : (childProfile ? [childProfile] : [defaultFallbackChild]);
+  const targetId = activeChildId || childProfile?.id || effectiveChildren[0]?.id;
+  const currentChild = effectiveChildren.find(c => Boolean(c && c.id === targetId)) || effectiveChildren[0] || defaultFallbackChild;
 
   // Filter checklists and logs for the active child
-  const childChecklists = pendingChecklists.filter(c => c.student_id === currentChild.id);
+  const childChecklists = pendingChecklists.filter(c => Boolean(c && c.student_id === currentChild.id));
 
   const handleApproveChecklist = (id: string, grade: 'L' | 'BL') => {
     confetti({
@@ -215,7 +248,8 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
             {effectiveChildren.map((child) => {
-              const isSelected = child.id === currentChild.id;
+              if (!child || !child.id) return null;
+              const isSelected = child.id === currentChild?.id;
               return (
                 <button
                   key={child.id}
@@ -269,6 +303,18 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
             <Star className="w-4 h-4 text-amber-400 fill-amber-400" />
             <span>{currentChild.star_points || 0} Poin Bintang</span>
           </div>
+
+          {/* Tombol Hapus Santri dari Portal Orang Tua */}
+          {onDeleteChild && (
+            <button
+              onClick={() => setChildToDelete(currentChild)}
+              className="px-3 py-1.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95 shadow-2xs"
+              title={`Hapus profil santri ${currentChild.full_name}`}
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+              <span className="hidden sm:inline">Hapus Santri</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -599,6 +645,67 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL KONFIRMASI HAPUS SANTRI */}
+      {childToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-2 border-rose-300 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 border-2 border-rose-300 flex items-center justify-center text-rose-600 flex-shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-800">Hapus Profil Santri</h3>
+                <p className="text-xs text-slate-500">Konfirmasi pemutusan hubungan santri</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Apakah Anda yakin ingin menghapus santri <strong className="text-rose-600">{childToDelete.full_name}</strong>?
+            </p>
+
+            <div className="p-3 bg-rose-50 rounded-2xl border border-rose-200 text-[11px] text-rose-700 space-y-1">
+              <div className="font-bold flex items-center gap-1">
+                <span>⚠️ Perhatian Data Terkait:</span>
+              </div>
+              <p>
+                Menghapus santri ini akan membersihkan seluruh riwayat setoran muroja'ah, mutaba'ah harian, rekaman suara audio, dan data akademiknya secara permanen.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeletingChild}
+                onClick={() => setChildToDelete(null)}
+                className="btn-chunky-ghost py-2 px-3.5 text-xs"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingChild}
+                onClick={async () => {
+                  if (!onDeleteChild || !childToDelete) return;
+                  setIsDeletingChild(true);
+                  try {
+                    await onDeleteChild(childToDelete.id);
+                    setChildToDelete(null);
+                  } catch (err: any) {
+                    alert('Gagal menghapus santri: ' + err.message);
+                  } finally {
+                    setIsDeletingChild(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-md transition-all active:scale-95 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeletingChild ? 'Menghapus...' : 'Ya, Hapus Santri'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
