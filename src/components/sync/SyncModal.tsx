@@ -107,6 +107,7 @@ export function SyncModal({ isOpen, onClose, onSyncCompleted }: SyncModalProps) 
   const handleLogout = async () => {
     await signOutUser();
     setUserEmail(null);
+    window.location.reload();
   };
 
   const formatLastSyncedTime = (isoString: string | null) => {

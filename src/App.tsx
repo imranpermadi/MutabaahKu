@@ -14,11 +14,12 @@ import {
   Wifi,
   WifiOff,
   RefreshCw,
-  Cloud
+  Cloud,
+  Eye
 } from 'lucide-react';
 import { db, seedInitialData } from './lib/db';
-import { syncOfflineQueueToSupabase, isSupabaseConfigured } from './lib/supabase';
-import { UserRole, UserGender } from './types/database';
+import { syncOfflineQueueToSupabase, isSupabaseConfigured, supabase } from './lib/supabase';
+import { UserRole, UserGender, UserProfile } from './types/database';
 import { MascotCharacter } from './components/mascot/MascotCharacter';
 import { SholatAnimator } from './components/prayer/SholatAnimator';
 import { PrayerTimesCard } from './components/prayer/PrayerTimesCard';
@@ -28,17 +29,41 @@ import { MurojaahChecklist } from './components/murojaah/MurojaahChecklist';
 import { IbadahTracker } from './components/yaumiyah/IbadahTracker';
 import { ParentDashboard } from './components/parent/ParentDashboard';
 import { SyncModal } from './components/sync/SyncModal';
+import { RoleSelectionModal } from './components/auth/RoleSelectionModal';
 
 export function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>('STUDENT');
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [showRolePicker, setShowRolePicker] = useState(false);
+  const [isPreviewingStudent, setIsPreviewingStudent] = useState(false);
   const [activeTab, setActiveTab] = useState<'SHOLAT' | 'PRAYER_QIBLA' | 'MUROJAAH' | 'YAUMIYAH'>('SHOLAT');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
 
-  // Initialize offline seed data on boot
+  // Initialize offline seed data and listen for Google SSO Auth on boot
   useEffect(() => {
     seedInitialData();
+
+    if (supabase) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user) {
+          handleAuthUser(session.user);
+        }
+      });
+
+      const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (session?.user) {
+          handleAuthUser(session.user);
+        } else {
+          setCurrentUser(null);
+        }
+      });
+
+      return () => {
+        authListener.subscription.unsubscribe();
+      };
+    }
 
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -51,6 +76,53 @@ export function App() {
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  const handleAuthUser = async (user: any) => {
+    setCurrentUser(user);
+    const existing = await db.user_profiles.where('email').equals(user.email || '').first();
+    if (existing && existing.role) {
+      setCurrentRole(existing.role);
+    } else {
+      if (supabase) {
+        const { data: cloudProfiles } = await supabase.from('user_profiles').select('*').eq('email', user.email);
+        if (cloudProfiles && cloudProfiles.length > 0 && cloudProfiles[0].role) {
+          await db.user_profiles.put(cloudProfiles[0]);
+          setCurrentRole(cloudProfiles[0].role);
+          return;
+        }
+      }
+      setShowRolePicker(true);
+    }
+  };
+
+  const handleSelectRole = async (selectedRole: UserRole) => {
+    setShowRolePicker(false);
+    setCurrentRole(selectedRole);
+
+    if (currentUser) {
+      const newProfile: UserProfile = {
+        id: currentUser.id,
+        email: currentUser.email,
+        full_name: currentUser.user_metadata?.full_name || (selectedRole === 'PARENT' ? 'Orang Tua' : 'Anak Sholih'),
+        role: selectedRole,
+        gender: 'PUTRA',
+        prayer_city_id: '58a2fc6ed39fd083f55d4182bf88826d',
+        prayer_city_name: 'KOTA MEDAN',
+        latitude: 3.5952,
+        longitude: 98.6722,
+        qibla_bearing: 292.8,
+        daily_streak: 1,
+        star_points: 0,
+        water_drops: 0,
+        garden_tree_level: 1,
+        unlocked_stickers: ['sticker_welcome_star']
+      };
+      await db.user_profiles.put(newProfile);
+      if (supabase) {
+        await supabase.from('user_profiles').upsert(newProfile, { onConflict: 'id' });
+      }
+    }
+  };
 
   // Dexie Live Queries
   const studentProfile = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').first());
@@ -201,42 +273,84 @@ export function App() {
               <RefreshCw className={`w-3 h-3 text-slate-500 ${isSyncing ? 'animate-spin' : ''}`} />
             </button>
 
-            {/* Role Switcher Tab (Orang Tua vs Anak) */}
-            <div className="flex items-center p-1 bg-slate-100 rounded-2xl border border-slate-200">
+            {/* Role Badge & Identity (Pemisahan Akun Otomatis Sesuai Akun Google) */}
+            {currentRole === 'PARENT' ? (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-emerald-800 text-white font-black text-xs px-3 py-1.5 rounded-xl border border-emerald-700 shadow-sm">
+                  <ShieldCheck className="w-4 h-4 text-emerald-300" />
+                  <span className="hidden sm:inline">Portal Orang Tua</span>
+                  <span className="sm:hidden">Orang Tua</span>
+                  {pendingChecklists.length > 0 && (
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse ml-0.5" />
+                  )}
+                </div>
+
+                {/* Pratinjau Ruang Anak Khusus Akun Orang Tua */}
+                <button
+                  onClick={() => setIsPreviewingStudent(!isPreviewingStudent)}
+                  title="Lihat tampilan aplikasi persis seperti yang dilihat anak"
+                  className="hidden md:flex items-center gap-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs px-2.5 py-1.5 rounded-xl shadow-2xs transition-all active:scale-95"
+                >
+                  <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{isPreviewingStudent ? 'Kembali ke Dashboard' : 'Pratinjau Ruang Anak'}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-sky-100 text-sky-900 font-black text-xs px-2.5 py-1.5 rounded-xl border border-sky-300 shadow-2xs">
+                  <BookOpen className="w-3.5 h-3.5 text-sky-600" />
+                  <span className="hidden sm:inline">Ruang Siswa</span>
+                  <span className="sm:hidden">Siswa</span>
+                </div>
+              </div>
+            )}
+
+            {/* Login / Profile Avatar Pill */}
+            {currentUser ? (
               <button
-                onClick={() => setCurrentRole('STUDENT')}
-                className={`text-xs font-black px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                  currentRole === 'STUDENT'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
+                onClick={() => setIsSyncModalOpen(true)}
+                title={`Akun: ${currentUser.email} (${currentRole})`}
+                className="w-8 h-8 rounded-full border-2 border-emerald-500 overflow-hidden flex items-center justify-center bg-emerald-100 text-emerald-800 font-black text-xs hover:ring-2 hover:ring-emerald-400 transition-all active:scale-95"
               >
-                <User className="w-3.5 h-3.5" />
-                <span>Ruang Anak</span>
-              </button>
-              <button
-                onClick={() => setCurrentRole('PARENT')}
-                className={`text-xs font-black px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                  currentRole === 'PARENT'
-                    ? 'bg-emerald-800 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Orang Tua</span>
-                {pendingChecklists.length > 0 && (
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                {currentUser.user_metadata?.avatar_url ? (
+                  <img src={currentUser.user_metadata.avatar_url} alt="User" className="w-full h-full object-cover" />
+                ) : (
+                  currentUser.email?.[0]?.toUpperCase() || 'U'
                 )}
               </button>
-            </div>
+            ) : (
+              <button
+                onClick={() => setIsSyncModalOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-2.5 py-1.5 rounded-xl shadow-chunky-emerald flex items-center gap-1 active:scale-95 transition-all"
+              >
+                <User className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Masuk</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
 
       {/* Main Content Body */}
       <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
-        {/* STUDENT WORKSPACE */}
-        {currentRole === 'STUDENT' ? (
+        {/* Banner Mode Pratinjau Jika Orang Tua Sedang Memeriksa Ruang Anak */}
+        {currentRole === 'PARENT' && isPreviewingStudent && (
+          <div className="bg-amber-50 border-2 border-amber-300 text-amber-950 p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold shadow-sm animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <Eye className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <span>Anda sedang melihat <strong>Pratinjau Ruang Belajar Anak</strong> (Hanya preview tampilan).</span>
+            </div>
+            <button
+              onClick={() => setIsPreviewingStudent(false)}
+              className="bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-black hover:bg-amber-700 transition-colors shadow-2xs"
+            >
+              Kembali ke Dashboard
+            </button>
+          </div>
+        )}
+
+        {/* STUDENT WORKSPACE (Tampil jika role STUDENT atau Orang Tua dalam Mode Pratinjau) */}
+        {currentRole === 'STUDENT' || isPreviewingStudent ? (
           <>
             {/* Mascot Greeting Strip */}
             <MascotCharacter
@@ -365,6 +479,14 @@ export function App() {
       <SyncModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
+      />
+
+      {/* Modal Pemilihan Peran Pertama Kali Login Google */}
+      <RoleSelectionModal
+        isOpen={showRolePicker}
+        userEmail={currentUser?.email}
+        userName={currentUser?.user_metadata?.full_name}
+        onSelectRole={handleSelectRole}
       />
     </div>
   );
