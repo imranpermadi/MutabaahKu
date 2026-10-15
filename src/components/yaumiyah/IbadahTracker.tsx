@@ -26,6 +26,13 @@ export const IbadahTracker: React.FC<IbadahTrackerProps> = ({
   const [log, setLog] = useState<IbadahDailyLog>(initialLog);
   const [isSaved, setIsSaved] = useState(false);
 
+  // Sinkronisasi state ketika initialLog dari Dexie/Supabase selesai dimuat
+  React.useEffect(() => {
+    if (initialLog) {
+      setLog(initialLog);
+    }
+  }, [initialLog]);
+
   const prayerKeys: { key: keyof IbadahDailyLog; name: string; icon: any }[] = [
     { key: 'sholat_subuh', name: 'Subuh', icon: Sunrise },
     { key: 'sholat_dzuhur', name: 'Dzuhur', icon: Sun },

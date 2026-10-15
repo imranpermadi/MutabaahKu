@@ -14,12 +14,15 @@ import {
   Wifi,
   WifiOff,
   RefreshCw,
+  RotateCw,
   Cloud,
-  Eye
+  Eye,
+  Shield,
+  LogOut
 } from 'lucide-react';
 import { db, seedInitialData } from './lib/db';
-import { syncOfflineQueueToSupabase, isSupabaseConfigured, supabase } from './lib/supabase';
-import { UserRole, UserGender, UserProfile } from './types/database';
+import { syncOfflineQueueToSupabase, isSupabaseConfigured, supabase, executeFullSync } from './lib/supabase';
+import { UserRole, UserGender, UserProfile, IbadahDailyLog } from './types/database';
 import { MascotCharacter } from './components/mascot/MascotCharacter';
 import { SholatAnimator } from './components/prayer/SholatAnimator';
 import { PrayerTimesCard } from './components/prayer/PrayerTimesCard';
@@ -30,6 +33,9 @@ import { IbadahTracker } from './components/yaumiyah/IbadahTracker';
 import { ParentDashboard } from './components/parent/ParentDashboard';
 import { SyncModal } from './components/sync/SyncModal';
 import { RoleSelectionModal } from './components/auth/RoleSelectionModal';
+import { LoginModal } from './components/auth/LoginModal';
+import { AdminDashboard } from './components/admin/AdminDashboard';
+import { GuestLandingHero } from './components/landing/GuestLandingHero';
 
 export function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>('STUDENT');
@@ -40,6 +46,9 @@ export function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [syncToast, setSyncToast] = useState<{ show: boolean; msg: string; isError?: boolean } | null>(null);
 
   // Initialize offline seed data and listen for Google SSO Auth on boot
   useEffect(() => {
@@ -133,10 +142,56 @@ export function App() {
     db.ibadah_daily_logs.where('student_id').equals(studentProfile?.id || '').first()
   );
 
-  const handleManualSync = async () => {
+  const defaultIbadahLog: IbadahDailyLog = {
+    id: `log-${studentProfile?.id || 'std-1'}-${today}`,
+    student_id: studentProfile?.id || 'std-1',
+    log_date: today,
+    sholat_subuh: 'BERJAMAAH',
+    sholat_dzuhur: 'BERJAMAAH',
+    sholat_ashar: 'BERJAMAAH',
+    sholat_maghrib: 'BERJAMAAH',
+    sholat_isya: 'BERJAMAAH',
+    dzikir_bada_sholat_count: 5,
+    sholat_dhuha_rakaat: 2,
+    sholat_rawatib_count: 4,
+    sholat_qiyamul_lail: false,
+    puasa_type: 'SENIN_KAMIS',
+    puasa_completion: 'PENUH_MAGHRIB',
+    parent_review_status: 'PENDING',
+    reward_stars_awarded: 0,
+    created_at: new Date().toISOString()
+  };
+
+  const handleAutoSync = async () => {
+    if (isSyncing) return;
     setIsSyncing(true);
-    await syncOfflineQueueToSupabase();
-    setTimeout(() => setIsSyncing(false), 800);
+    setSyncToast({ show: true, msg: 'Sedang menyinkronkan data dengan Cloud...' });
+    try {
+      const res = await executeFullSync(currentUser?.email);
+      if (res.success) {
+        setSyncToast({ 
+          show: true, 
+          msg: `✅ Sinkronisasi Berhasil! (${res.pushed} data diunggah, ${res.pulled} data ditarik)` 
+        });
+      } else {
+        setSyncToast({ 
+          show: true, 
+          msg: `⚠️ ${res.error || 'Sinkronisasi offline: data tersimpan di perangkat.'}`,
+          isError: true 
+        });
+      }
+    } catch (err: any) {
+      setSyncToast({ 
+        show: true, 
+        msg: `⚠️ Gagal sinkronisasi: ${err.message || 'Koneksi bermasalah'}`,
+        isError: true 
+      });
+    } finally {
+      setIsSyncing(false);
+      setTimeout(() => {
+        setSyncToast(null);
+      }, 4000);
+    }
   };
 
   const handleWaterTree = async () => {
@@ -233,45 +288,65 @@ export function App() {
             </div>
           </div>
 
-          {/* User Gamification Stats Strip */}
-          {currentRole === 'STUDENT' && studentProfile && (
-            <div className="flex items-center gap-2 sm:gap-3">
-              {/* Daily Streak */}
-              <div className="flex items-center gap-1 bg-amber-50 text-amber-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-amber-200">
-                <Flame className="w-4 h-4 fill-amber-500 text-amber-500" />
-                <span>{studentProfile.daily_streak} Hari</span>
-              </div>
-
-              {/* Star Points */}
-              <div className="flex items-center gap-1 bg-emerald-50 text-emerald-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-emerald-200">
-                <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
-                <span>{studentProfile.star_points}</span>
-              </div>
-
-              {/* Water Drops */}
-              <div className="hidden sm:flex items-center gap-1 bg-sky-50 text-sky-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-sky-200">
-                <Droplets className="w-4 h-4 fill-sky-400 text-sky-500" />
-                <span>{studentProfile.water_drops}</span>
-              </div>
+          {/* User Gamification Stats Strip / Mode Tamu Indicator */}
+          {!currentUser ? (
+            <div className="flex items-center gap-1.5 bg-emerald-100/90 text-emerald-950 font-black text-xs px-3 py-1.5 rounded-xl border border-emerald-300 shadow-2xs">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600 fill-emerald-500 animate-pulse" />
+              <span className="hidden sm:inline">Mode Tamu (Eksplorasi)</span>
+              <span className="sm:hidden">Mode Tamu</span>
             </div>
+          ) : (
+            currentRole === 'STUDENT' && studentProfile && (
+              <div className="flex items-center gap-2 sm:gap-3">
+                {/* Daily Streak */}
+                <div className="flex items-center gap-1 bg-amber-50 text-amber-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-amber-200">
+                  <Flame className="w-4 h-4 fill-amber-500 text-amber-500" />
+                  <span>{studentProfile.daily_streak} Hari</span>
+                </div>
+
+                {/* Star Points */}
+                <div className="flex items-center gap-1 bg-emerald-50 text-emerald-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-emerald-200">
+                  <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
+                  <span>{studentProfile.star_points}</span>
+                </div>
+
+                {/* Water Drops */}
+                <div className="hidden sm:flex items-center gap-1 bg-sky-50 text-sky-950 font-black text-xs px-2.5 py-1.5 rounded-xl border border-sky-200">
+                  <Droplets className="w-4 h-4 fill-sky-400 text-sky-500" />
+                  <span>{studentProfile.water_drops}</span>
+                </div>
+              </div>
+            )
           )}
 
           {/* Role Switcher & Cloud Sync Indicator */}
           <div className="flex items-center gap-2">
-            {/* Sync Cloud & Multi-Device Button */}
+            {/* Sync Cloud Otomatis (Tanpa Popup Modal) */}
             <button
-              onClick={() => setIsSyncModalOpen(true)}
-              title="Buka Panel Sinkronisasi Cloud & Pindah Perangkat (Google SSO)"
-              className={`px-2.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-2xs border active:scale-95 ${
+              onClick={handleAutoSync}
+              disabled={isSyncing}
+              title="Sinkronisasi Langsung Otomatis 2-Arah dengan Cloud"
+              className={`px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-2xs border active:scale-95 ${
                 isOnline 
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100' 
                   : 'bg-amber-100 text-amber-900 border-amber-300 hover:bg-amber-200'
               }`}
             >
-              <Cloud className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden sm:inline">Sync</span>
-              <RefreshCw className={`w-3 h-3 text-slate-500 ${isSyncing ? 'animate-spin' : ''}`} />
+              <RotateCw className={`w-3.5 h-3.5 text-emerald-600 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{isSyncing ? 'Menyinkronkan...' : 'Sync'}</span>
             </button>
+
+            {/* Tombol Akses Admin Console jika akun imranpermadi@gmail.com */}
+            {currentUser?.email?.toLowerCase() === 'imranpermadi@gmail.com' && (
+              <button
+                onClick={() => setIsAdminOpen(true)}
+                title="Kelola Data Live Cloud Supabase (CRUD)"
+                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-xs px-2.5 py-1.5 rounded-xl shadow-2xs flex items-center gap-1.5 active:scale-95 transition-all border border-purple-400"
+              >
+                <Shield className="w-3.5 h-3.5 text-purple-200" />
+                <span className="hidden md:inline">Admin Console</span>
+              </button>
+            )}
 
             {/* Role Badge & Identity (Pemisahan Akun Otomatis Sesuai Akun Google) */}
             {currentRole === 'PARENT' ? (
@@ -307,173 +382,241 @@ export function App() {
 
             {/* Login / Profile Avatar Pill */}
             {currentUser ? (
-              <button
-                onClick={() => setIsSyncModalOpen(true)}
-                title={`Akun: ${currentUser.email} (${currentRole})`}
-                className="w-8 h-8 rounded-full border-2 border-emerald-500 overflow-hidden flex items-center justify-center bg-emerald-100 text-emerald-800 font-black text-xs hover:ring-2 hover:ring-emerald-400 transition-all active:scale-95"
-              >
-                {currentUser.user_metadata?.avatar_url ? (
-                  <img src={currentUser.user_metadata.avatar_url} alt="User" className="w-full h-full object-cover" />
-                ) : (
-                  currentUser.email?.[0]?.toUpperCase() || 'U'
-                )}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setIsSyncModalOpen(true)}
+                  title={`Akun: ${currentUser.email} (${currentRole}) - Buka Pengaturan`}
+                  className="w-8 h-8 rounded-full border-2 border-emerald-500 overflow-hidden flex items-center justify-center bg-emerald-100 text-emerald-800 font-black text-xs hover:ring-2 hover:ring-emerald-400 transition-all active:scale-95"
+                >
+                  {currentUser.user_metadata?.avatar_url ? (
+                    <img src={currentUser.user_metadata.avatar_url} alt="User" className="w-full h-full object-cover" />
+                  ) : (
+                    currentUser.email?.[0]?.toUpperCase() || 'U'
+                  )}
+                </button>
+                <button
+                  onClick={async () => {
+                    if (supabase) await supabase.auth.signOut();
+                    window.location.reload();
+                  }}
+                  title="Keluar dari Akun"
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
             ) : (
               <button
-                onClick={() => setIsSyncModalOpen(true)}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-2.5 py-1.5 rounded-xl shadow-chunky-emerald flex items-center gap-1 active:scale-95 transition-all"
+                onClick={() => setIsLoginModalOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-3 py-1.5 rounded-xl shadow-chunky-emerald flex items-center gap-1.5 active:scale-95 transition-all"
               >
                 <User className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Masuk</span>
+                <span>Masuk</span>
               </button>
             )}
           </div>
         </div>
       </header>
 
+      {/* Toast Notification Sinkronisasi Otomatis */}
+      {syncToast && (
+        <div className="fixed top-16 right-4 z-50 max-w-sm shadow-xl rounded-2xl bg-slate-900/95 text-white border border-slate-700 p-3.5 flex items-center gap-2.5 text-xs font-bold backdrop-blur-md animate-fadeIn">
+          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${syncToast.isError ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`} />
+          <span className="leading-tight">{syncToast.msg}</span>
+        </div>
+      )}
+
       {/* Main Content Body */}
       <main className="max-w-6xl mx-auto px-4 pt-6 space-y-6">
-        {/* Banner Mode Pratinjau Jika Orang Tua Sedang Memeriksa Ruang Anak */}
-        {currentRole === 'PARENT' && isPreviewingStudent && (
-          <div className="bg-amber-50 border-2 border-amber-300 text-amber-950 p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold shadow-sm animate-fadeIn">
-            <div className="flex items-center gap-2">
-              <Eye className="w-4 h-4 text-amber-600 flex-shrink-0" />
-              <span>Anda sedang melihat <strong>Pratinjau Ruang Belajar Anak</strong> (Hanya preview tampilan).</span>
-            </div>
-            <button
-              onClick={() => setIsPreviewingStudent(false)}
-              className="bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-black hover:bg-amber-700 transition-colors shadow-2xs"
-            >
-              Kembali ke Dashboard
-            </button>
-          </div>
+        {/* Showcase Banner Iklan & Demo Khusus Pengunjung Belum Login */}
+        {!currentUser && (
+          <GuestLandingHero
+            onOpenLogin={() => setIsLoginModalOpen(true)}
+            onExploreDemo={() => {
+              const el = document.getElementById('demo-workspace');
+              el?.scrollIntoView({ behavior: 'smooth' });
+            }}
+          />
         )}
 
-        {/* STUDENT WORKSPACE (Tampil jika role STUDENT atau Orang Tua dalam Mode Pratinjau) */}
-        {currentRole === 'STUDENT' || isPreviewingStudent ? (
-          <>
-            {/* Mascot Greeting Strip */}
-            <MascotCharacter
-              gender={studentProfile?.gender || 'PUTRA'}
-              message={`Assalamu'alaikum, ${studentProfile?.full_name || 'Hafiz'}! Yuk bersiap sholat tepat waktu dan muroja'ah hafalan Juz 30 hari ini!`}
-              actionText={`Ganti Mode Karakter (${studentProfile?.gender === 'PUTRA' ? 'Si Hafiz' : 'Si Hafizah'})`}
-              onActionClick={handleToggleGender}
-            />
-
-            {/* Virtual Garden Widget */}
-            <PahalaGarden
-              treeLevel={studentProfile?.garden_tree_level || 2}
-              waterDrops={studentProfile?.water_drops || 42}
-              starPoints={studentProfile?.star_points || 135}
-              unlockedStickers={studentProfile?.unlocked_stickers || ['sticker_welcome_star', 'sticker_kabah']}
-              onWaterTree={handleWaterTree}
-            />
-
-            {/* Student Navigation Tabs */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-emerald-500/20">
-              <button
-                onClick={() => setActiveTab('SHOLAT')}
-                className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
-                  activeTab === 'SHOLAT'
-                    ? 'btn-chunky-emerald shadow-chunky-emerald'
-                    : 'btn-chunky-ghost'
-                }`}
-              >
-                <span>🕌 Belajar Gerakan & Bacaan Sholat</span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('PRAYER_QIBLA')}
-                className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
-                  activeTab === 'PRAYER_QIBLA'
-                    ? 'btn-chunky-sky shadow-chunky-sky'
-                    : 'btn-chunky-ghost'
-                }`}
-              >
-                <Compass className="w-4 h-4" />
-                <span>Jadwal Sholat & Kompas Ka'bah</span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('MUROJAAH')}
-                className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
-                  activeTab === 'MUROJAAH'
-                    ? 'btn-chunky-amber shadow-chunky-amber'
-                    : 'btn-chunky-ghost'
-                }`}
-              >
-                <BookOpen className="w-4 h-4" />
-                <span>Ceklis Muroja'ah Ujian</span>
-              </button>
-
-              <button
-                onClick={() => setActiveTab('YAUMIYAH')}
-                className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
-                  activeTab === 'YAUMIYAH'
-                    ? 'btn-chunky-lavender'
-                    : 'btn-chunky-ghost'
-                }`}
-              >
-                <Calendar className="w-4 h-4" />
-                <span>Mutaba'ah Yaumiyah (Sholat & Puasa)</span>
-              </button>
-            </div>
-
-            {/* Active Tab View */}
-            {activeTab === 'SHOLAT' && (
-              <SholatAnimator
-                gender={studentProfile?.gender || 'PUTRA'}
-                onStepCompleted={handleStepCompleted}
-              />
-            )}
-
-            {activeTab === 'PRAYER_QIBLA' && (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                <div className="lg:col-span-7">
-                  <PrayerTimesCard
-                    cityId={studentProfile?.prayer_city_id}
-                    cityName={studentProfile?.prayer_city_name}
-                  />
-                </div>
-                <div className="lg:col-span-5">
-                  <QiblaCompass
-                    latitude={studentProfile?.latitude}
-                    longitude={studentProfile?.longitude}
-                    cityName={studentProfile?.prayer_city_name}
-                  />
-                </div>
+        <div id="demo-workspace" className="space-y-6">
+          {/* Banner Eksplorasi Demo jika Pengunjung Belum Login */}
+          {!currentUser && (
+            <div className="bg-emerald-50/95 border-2 border-emerald-300/80 text-emerald-950 p-3.5 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs font-bold shadow-sm animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping flex-shrink-0" />
+                <span>✨ Anda sedang mencoba <strong>Demo Interaktif MutabaahKu</strong> di perangkat ini. Coba ganti tab sholat atau isi mutaba'ah di bawah.</span>
               </div>
-            )}
+              <button
+                onClick={() => setIsLoginModalOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-black px-3.5 py-1.5 rounded-xl shadow-2xs text-xs transition-all active:scale-95 flex items-center gap-1.5"
+              >
+                <User className="w-3.5 h-3.5" />
+                <span>Simpan Permanen ke Akun</span>
+              </button>
+            </div>
+          )}
 
-            {activeTab === 'MUROJAAH' && (
-              <MurojaahChecklist
-                checklists={checklists}
-                onPassIncrement={handlePassIncrement}
-                onClaimReview={(id) => handlePassIncrement(id)}
-              />
-            )}
+          {/* Banner Mode Pratinjau Jika Orang Tua Sedang Memeriksa Ruang Anak */}
+          {currentRole === 'PARENT' && isPreviewingStudent && (
+            <div className="bg-amber-50 border-2 border-amber-300 text-amber-950 p-3.5 rounded-2xl flex items-center justify-between text-xs font-bold shadow-sm animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <Eye className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <span>Anda sedang melihat <strong>Pratinjau Ruang Belajar Anak</strong> (Hanya preview tampilan).</span>
+              </div>
+              <button
+                onClick={() => setIsPreviewingStudent(false)}
+                className="bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-black hover:bg-amber-700 transition-colors shadow-2xs"
+              >
+                Kembali ke Dashboard
+              </button>
+            </div>
+          )}
 
-            {activeTab === 'YAUMIYAH' && todayIbadahLog && (
-              <IbadahTracker
-                initialLog={todayIbadahLog}
-                onSaveLog={handleSaveIbadah}
+          {/* STUDENT WORKSPACE (Tampil jika role STUDENT atau Orang Tua dalam Mode Pratinjau) */}
+          {currentRole === 'STUDENT' || isPreviewingStudent ? (
+            <>
+              {/* Mascot Greeting Strip */}
+              <MascotCharacter
+                gender={studentProfile?.gender || 'PUTRA'}
+                message={`Assalamu'alaikum, ${studentProfile?.full_name || 'Hafiz'}! Yuk bersiap sholat tepat waktu dan muroja'ah hafalan Juz 30 hari ini!`}
+                actionText={`Ganti Mode Karakter (${studentProfile?.gender === 'PUTRA' ? 'Si Hafiz' : 'Si Hafizah'})`}
+                onActionClick={handleToggleGender}
               />
-            )}
-          </>
-        ) : (
-          /* PARENT DASHBOARD */
-          parentProfile && studentProfile && (
-            <ParentDashboard
-              parentProfile={parentProfile}
-              childProfile={studentProfile}
-              pendingChecklists={pendingChecklists}
-              pendingIbadahLog={todayIbadahLog}
-              onApproveChecklist={handleApproveChecklist}
-              onApproveIbadah={handleApproveIbadah}
-            />
-          )
-        )}
+
+              {/* Virtual Garden Widget */}
+              <PahalaGarden
+                treeLevel={studentProfile?.garden_tree_level || 2}
+                waterDrops={studentProfile?.water_drops || 42}
+                starPoints={studentProfile?.star_points || 135}
+                unlockedStickers={studentProfile?.unlocked_stickers || ['sticker_welcome_star', 'sticker_kabah']}
+                onWaterTree={handleWaterTree}
+              />
+
+              {/* Student Navigation Tabs */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-emerald-500/20">
+                <button
+                  onClick={() => setActiveTab('SHOLAT')}
+                  className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
+                    activeTab === 'SHOLAT'
+                      ? 'btn-chunky-emerald shadow-chunky-emerald'
+                      : 'btn-chunky-ghost'
+                  }`}
+                >
+                  <span>🕌 Belajar Gerakan & Bacaan Sholat</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('PRAYER_QIBLA')}
+                  className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
+                    activeTab === 'PRAYER_QIBLA'
+                      ? 'btn-chunky-sky shadow-chunky-sky'
+                      : 'btn-chunky-ghost'
+                  }`}
+                >
+                  <Compass className="w-4 h-4" />
+                  <span>Jadwal Sholat & Kompas Ka'bah</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('MUROJAAH')}
+                  className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
+                    activeTab === 'MUROJAAH'
+                      ? 'btn-chunky-amber shadow-chunky-amber'
+                      : 'btn-chunky-ghost'
+                  }`}
+                >
+                  <BookOpen className="w-4 h-4" />
+                  <span>Ceklis Muroja'ah Ujian</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('YAUMIYAH')}
+                  className={`btn-chunky py-2.5 px-4 text-xs font-black whitespace-nowrap ${
+                    activeTab === 'YAUMIYAH'
+                      ? 'btn-chunky-lavender'
+                      : 'btn-chunky-ghost'
+                  }`}
+                >
+                  <Calendar className="w-4 h-4" />
+                  <span>Mutaba'ah Yaumiyah (Sholat & Puasa)</span>
+                </button>
+              </div>
+
+              {/* Active Tab View */}
+              {activeTab === 'SHOLAT' && (
+                <SholatAnimator
+                  gender={studentProfile?.gender || 'PUTRA'}
+                  onStepCompleted={handleStepCompleted}
+                />
+              )}
+
+              {activeTab === 'PRAYER_QIBLA' && (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  <div className="lg:col-span-7">
+                    <PrayerTimesCard
+                      cityId={studentProfile?.prayer_city_id}
+                      cityName={studentProfile?.prayer_city_name}
+                    />
+                  </div>
+                  <div className="lg:col-span-5">
+                    <QiblaCompass
+                      latitude={studentProfile?.latitude}
+                      longitude={studentProfile?.longitude}
+                      cityName={studentProfile?.prayer_city_name}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'MUROJAAH' && (
+                <MurojaahChecklist
+                  checklists={checklists}
+                  onPassIncrement={handlePassIncrement}
+                  onClaimReview={(id) => handlePassIncrement(id)}
+                />
+              )}
+
+              {activeTab === 'YAUMIYAH' && (
+                <IbadahTracker
+                  initialLog={todayIbadahLog || defaultIbadahLog}
+                  onSaveLog={handleSaveIbadah}
+                />
+              )}
+            </>
+          ) : (
+            /* PARENT DASHBOARD */
+            parentProfile && studentProfile && (
+              <ParentDashboard
+                parentProfile={parentProfile}
+                childProfile={studentProfile}
+                pendingChecklists={pendingChecklists}
+                pendingIbadahLog={todayIbadahLog || defaultIbadahLog}
+                onApproveChecklist={handleApproveChecklist}
+                onApproveIbadah={handleApproveIbadah}
+              />
+            )
+          )}
+        </div>
       </main>
+
+      {/* Modal Login & Register */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        onLoginSuccess={(user) => {
+          setIsLoginModalOpen(false);
+          handleAuthUser(user);
+        }}
+      />
+
+      {/* Halaman Admin Cloud Supabase */}
+      {isAdminOpen && (
+        <AdminDashboard
+          currentUserEmail={currentUser?.email}
+          onClose={() => setIsAdminOpen(false)}
+        />
+      )}
 
       {/* Modal Sinkronisasi Cloud & Multi-Device Google SSO */}
       <SyncModal
