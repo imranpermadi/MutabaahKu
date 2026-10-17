@@ -253,10 +253,13 @@ export function App() {
   }, [targetStudentId]) || [];
 
   const today = todayLocal();
-  const todayIbadahLog = useLiveQuery(() => 
-    db.ibadah_daily_logs.where('student_id').equals(activeChild?.id || '').first(),
-    [activeChild?.id]
-  );
+  const childIbadahLogs = useLiveQuery(async () => {
+    if (!activeChild?.id) return [];
+    const logs = await db.ibadah_daily_logs.where('student_id').equals(activeChild.id).toArray();
+    return logs.sort((a, b) => b.log_date.localeCompare(a.log_date));
+  }, [activeChild?.id]) || [];
+
+  const todayIbadahLog = childIbadahLogs.find(l => l.log_date === today);
 
   const defaultIbadahLog: IbadahDailyLog = {
     id: `log-${activeChild?.id || 'std-1'}-${today}`,
@@ -357,6 +360,15 @@ export function App() {
 
   const handleApproveIbadah = async (logId: string, stars: number, notes?: string) => {
     const existing = await db.ibadah_daily_logs.get(logId);
+    
+    // Konsep Approval System: Jika sudah disetujui, cegah approval berulang kali & cegah spam penambahan bintang
+    if (existing && existing.parent_review_status === 'APPROVED') {
+      return;
+    }
+
+    const reviewedAt = new Date().toISOString();
+    const finalNotes = notes || 'Alhamdulillah, sholat dan ibadahnya sangat tertib & membanggakan!';
+
     if (!existing) {
       await db.ibadah_daily_logs.put({
         ...defaultIbadahLog,
@@ -364,22 +376,22 @@ export function App() {
         student_id: activeChild?.id || 'std-1',
         parent_review_status: 'APPROVED',
         reward_stars_awarded: stars,
-        parent_review_notes: notes || 'Alhamdulillah, sholat dan ibadahnya sangat tertib!',
-        reviewed_at: new Date().toISOString()
+        parent_review_notes: finalNotes,
+        reviewed_at: reviewedAt
       });
     } else {
       await db.ibadah_daily_logs.update(logId, {
         parent_review_status: 'APPROVED',
         reward_stars_awarded: stars,
-        parent_review_notes: notes || 'Alhamdulillah, sholat dan ibadahnya sangat tertib!',
-        reviewed_at: new Date().toISOString()
+        parent_review_notes: finalNotes,
+        reviewed_at: reviewedAt
       });
     }
 
     if (activeChild) {
       await db.user_profiles.update(activeChild.id, {
-        star_points: activeChild.star_points + stars,
-        water_drops: activeChild.water_drops + 15
+        star_points: (activeChild.star_points || 0) + stars,
+        water_drops: (activeChild.water_drops || 0) + 15
       });
     }
   };
@@ -790,7 +802,8 @@ export function App() {
                   setSelectedChildId(remaining[0]?.id || '');
                 }}
                 pendingChecklists={checklists.filter(c => c.parent_review_status === 'PENDING')}
-                pendingIbadahLog={todayIbadahLog || defaultIbadahLog}
+                pendingIbadahLog={todayIbadahLog}
+                allIbadahLogs={childIbadahLogs}
                 onApproveChecklist={handleApproveChecklist}
                 onApproveIbadah={handleApproveIbadah}
               />

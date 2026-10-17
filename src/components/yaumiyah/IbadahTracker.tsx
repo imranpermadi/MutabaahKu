@@ -9,10 +9,31 @@ import {
   Award, 
   Sparkles,
   Save,
-  Clock
+  Clock,
+  Calendar
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { IbadahDailyLog, SholatStatus, PuasaType, PuasaCompletion } from '../../types/database';
+
+function formatLogDateIndonesian(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const parts = dateStr.split('-');
+    if (parts.length < 3) return dateStr;
+    const [year, month, day] = parts.map(Number);
+    const date = new Date(year, month - 1, day);
+    const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const months = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const dayName = days[date.getDay()] || '';
+    const monthName = months[date.getMonth()] || '';
+    return `${dayName}, ${day} ${monthName} ${year}`;
+  } catch {
+    return dateStr;
+  }
+}
 
 interface IbadahTrackerProps {
   initialLog: IbadahDailyLog;
@@ -79,15 +100,26 @@ export const IbadahTracker: React.FC<IbadahTrackerProps> = ({
           <h3 className="text-lg sm:text-xl font-black text-slate-800 mt-1">
             Ceklis Sholat 5 Waktu & Puasa Harian
           </h3>
+          <p className="text-xs text-emerald-800 font-bold mt-1 flex items-center gap-1.5">
+            <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+            <span>{formatLogDateIndonesian(log.log_date || new Date().toISOString().split('T')[0])} (Hari Ini)</span>
+          </p>
         </div>
 
         {log.parent_review_status === 'APPROVED' ? (
-          <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full flex items-center gap-1.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            Sudah Diparaf Orang Tua
-          </span>
+          <div className="flex flex-col items-end">
+            <span className="text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 px-3 py-1.5 rounded-2xl flex items-center gap-1.5 shadow-2xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              Telah Diparaf Orang Tua (+{log.reward_stars_awarded || 25} ⭐)
+            </span>
+            {log.parent_review_notes && (
+              <span className="text-[11px] text-slate-600 italic mt-1 font-semibold max-w-xs text-right truncate">
+                "{log.parent_review_notes}"
+              </span>
+            )}
+          </div>
         ) : (
-          <span className="text-xs font-bold text-amber-800 bg-amber-100 px-3 py-1 rounded-full flex items-center gap-1.5">
+          <span className="text-xs font-bold text-amber-800 bg-amber-100 border border-amber-300 px-3 py-1.5 rounded-2xl flex items-center gap-1.5">
             <Clock className="w-4 h-4 text-amber-600" />
             Menunggu Paraf Orang Tua
           </span>

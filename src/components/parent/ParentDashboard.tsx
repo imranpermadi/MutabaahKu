@@ -28,7 +28,12 @@ import {
   Heart,
   MessageSquareQuote,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  Filter,
+  FileText,
+  Lock,
+  Eye,
+  CalendarDays
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import jsPDF from 'jspdf';
@@ -42,6 +47,48 @@ import {
   PuasaType,
   PuasaCompletion
 } from '../../types/database';
+
+// Format Tanggal Bahasa Indonesia Bebas Masalah UTC Timezone
+function formatIndonesianDate(dateStr: string): { fullDate: string; dayName: string; isToday: boolean; isYesterday: boolean } {
+  if (!dateStr) return { fullDate: '-', dayName: '', isToday: false, isYesterday: false };
+  try {
+    const parts = dateStr.split('-');
+    if (parts.length < 3) return { fullDate: dateStr, dayName: '', isToday: false, isYesterday: false };
+    const [year, month, day] = parts.map(Number);
+    const date = new Date(year, month - 1, day);
+    const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const months = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    const dayName = days[date.getDay()] || '';
+    const monthName = months[date.getMonth()] || '';
+    const fullDate = `${dayName}, ${day} ${monthName} ${year}`;
+
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const isToday = dateStr === todayStr;
+
+    const yest = new Date(now);
+    yest.setDate(yest.getDate() - 1);
+    const yestStr = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(yest.getDate()).padStart(2, '0')}`;
+    const isYesterday = dateStr === yestStr;
+
+    return { fullDate, dayName, isToday, isYesterday };
+  } catch {
+    return { fullDate: dateStr, dayName: '', isToday: false, isYesterday: false };
+  }
+}
+
+function formatTimeIndonesian(isoStr?: string): string {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+  } catch {
+    return '';
+  }
+}
 
 interface ParentDashboardProps {
   parentProfile: UserProfile;
@@ -59,6 +106,7 @@ interface ParentDashboardProps {
   onDeleteChild?: (childId: string) => Promise<void>;
   pendingChecklists: MurojaahChecklist[];
   pendingIbadahLog?: IbadahDailyLog;
+  allIbadahLogs?: IbadahDailyLog[];
   onApproveChecklist: (checklistId: string, grade: 'L' | 'BL', notes: string) => void;
   onApproveIbadah: (logId: string, stars: number, notes?: string) => void;
 }
@@ -73,6 +121,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onDeleteChild,
   pendingChecklists,
   pendingIbadahLog,
+  allIbadahLogs = [],
   onApproveChecklist,
   onApproveIbadah
 }) => {
@@ -84,7 +133,18 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   // State Evaluasi & Hadiah Bintang Mutaba'ah Yaumiyah
   const [selectedRewardStars, setSelectedRewardStars] = useState<number>(25);
   const [parentFeedbackNote, setParentFeedbackNote] = useState<string>('');
-  const [activeLogTab, setActiveLogTab] = useState<'ALL' | 'SHOLAT' | 'PUASA'>('ALL');
+
+  // Mode Tampilan Yaumiyah: 'QUEUE' (Antrean Menunggu Paraf) atau 'REPORT' (Laporan Riwayat Lengkap)
+  const [yaumiyahViewMode, setYaumiyahViewMode] = useState<'QUEUE' | 'REPORT'>('QUEUE');
+
+  // Filter State untuk Laporan Riwayat Ibadah
+  const [filterDateRange, setFilterDateRange] = useState<'ALL' | '7_DAYS' | '30_DAYS'>('ALL');
+  const [filterApprovalStatus, setFilterApprovalStatus] = useState<'ALL' | 'PENDING' | 'APPROVED'>('ALL');
+  const [filterPrayerStatus, setFilterPrayerStatus] = useState<'ALL' | 'PERFECT_5' | 'HAS_MISSED'>('ALL');
+  const [filterFastingStatus, setFilterFastingStatus] = useState<'ALL' | 'FASTING' | 'NOT_FASTING'>('ALL');
+
+  // Modal Detail Catatan Riwayat Ibadah (Read-only Modal)
+  const [selectedDetailLog, setSelectedDetailLog] = useState<IbadahDailyLog | null>(null);
 
   // Form State Tambah Anak
   const [newChildName, setNewChildName] = useState('');
@@ -201,6 +261,31 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       headStyles: { fillColor: [5, 150, 105] },
       theme: 'grid'
     });
+
+    // Yaumiyah Table
+    const childLogsForPdf = (allIbadahLogs || []).filter(l => Boolean(l && l.student_id === currentChild.id));
+    if (childLogsForPdf.length > 0) {
+      const yaumiyahTableData = childLogsForPdf.slice(0, 10).map((l, i) => [
+        i + 1,
+        l.log_date,
+        `${[l.sholat_subuh, l.sholat_dzuhur, l.sholat_ashar, l.sholat_maghrib, l.sholat_isya].filter(s => s === 'BERJAMAAH').length}/5 Berjamaah`,
+        l.puasa_type === 'TIDAK_PUASA' ? 'Tidak Puasa' : `${l.puasa_type.replace(/_/g, ' ')} (${l.puasa_completion === 'PENUH_MAGHRIB' ? 'Penuh' : 'Latihan'})`,
+        l.parent_review_status === 'APPROVED' ? `Disetujui (+${l.reward_stars_awarded || 25} Bintang)` : 'Menunggu Paraf',
+        l.parent_review_notes || '-'
+      ]);
+
+      const yaumiyahStartY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY + 12 : 120;
+      doc.setFontSize(11);
+      doc.text('CATATAN MUTABA\'AH YAUMIYAH (SHOLAT 5 WAKTU & PUASA)', 14, yaumiyahStartY);
+
+      autoTable(doc, {
+        startY: yaumiyahStartY + 4,
+        head: [['No', 'Tanggal', 'Sholat Fardhu', 'Puasa', 'Status Paraf', 'Catatan Orang Tua']],
+        body: yaumiyahTableData,
+        headStyles: { fillColor: [13, 148, 136] },
+        theme: 'grid'
+      });
+    }
 
     // Signature Footer
     const finalY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY + 25 : 120;
@@ -568,31 +653,54 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         </div>
       </div>
 
-      {/* SECTION 3: Evaluasi & Paraf Digital Mutaba'ah Yaumiyah (Sholat 5 Waktu & Shaum Puasa) */}
+      {/* SECTION 3: Evaluasi & Paraf Digital Mutaba'ah Yaumiyah (Approval System & Laporan Lengkap) */}
       {(() => {
-        const todayDateStr = new Date().toISOString().split('T')[0];
-        const displayLog: IbadahDailyLog = (pendingIbadahLog && pendingIbadahLog.student_id === currentChild.id)
-          ? pendingIbadahLog
-          : {
-              id: pendingIbadahLog?.id || `log-${currentChild.id}-${todayDateStr}`,
-              student_id: currentChild.id,
-              log_date: pendingIbadahLog?.log_date || todayDateStr,
-              sholat_subuh: pendingIbadahLog?.sholat_subuh || 'BERJAMAAH',
-              sholat_dzuhur: pendingIbadahLog?.sholat_dzuhur || 'BERJAMAAH',
-              sholat_ashar: pendingIbadahLog?.sholat_ashar || 'BERJAMAAH',
-              sholat_maghrib: pendingIbadahLog?.sholat_maghrib || 'BERJAMAAH',
-              sholat_isya: pendingIbadahLog?.sholat_isya || 'MUNFARID_TEPAT',
-              dzikir_bada_sholat_count: pendingIbadahLog?.dzikir_bada_sholat_count ?? 5,
-              sholat_dhuha_rakaat: pendingIbadahLog?.sholat_dhuha_rakaat ?? 2,
-              sholat_rawatib_count: pendingIbadahLog?.sholat_rawatib_count ?? 4,
-              sholat_qiyamul_lail: pendingIbadahLog?.sholat_qiyamul_lail ?? false,
-              puasa_type: pendingIbadahLog?.puasa_type || 'SENIN_KAMIS',
-              puasa_completion: pendingIbadahLog?.puasa_completion || 'PENUH_MAGHRIB',
-              child_notes: pendingIbadahLog?.child_notes || 'Alhamdulillah hari ini sholat 5 waktu di masjid bersama Abi dan kuat puasa sampai Maghrib!',
-              parent_review_status: pendingIbadahLog?.parent_review_status || 'PENDING',
-              reward_stars_awarded: pendingIbadahLog?.reward_stars_awarded || 0,
-              parent_review_notes: pendingIbadahLog?.parent_review_notes || ''
-            };
+        // Gabungkan seluruh log ibadah santri aktif
+        const childLogs = (allIbadahLogs || []).filter(l => l && l.student_id === currentChild.id);
+        const combinedLogs: IbadahDailyLog[] = [...childLogs];
+        if (pendingIbadahLog && pendingIbadahLog.student_id === currentChild.id && !combinedLogs.some(l => l.id === pendingIbadahLog.id)) {
+          combinedLogs.unshift(pendingIbadahLog);
+        }
+        // Urutkan tanggal terbaru di atas
+        combinedLogs.sort((a, b) => (b.log_date || '').localeCompare(a.log_date || ''));
+
+        // 1. Antrean Pending (Belum diparaf orang tua)
+        const pendingQueueLogs = combinedLogs.filter(l => l.parent_review_status === 'PENDING');
+
+        // 2. Filter Laporan Riwayat Ibadah (Tab 2)
+        const filteredHistoryLogs = combinedLogs.filter(log => {
+          // Filter Rentang Tanggal
+          if (filterDateRange === '7_DAYS' || filterDateRange === '30_DAYS') {
+            const logDate = new Date(log.log_date);
+            const now = new Date();
+            const diffDays = Math.floor((now.getTime() - logDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (filterDateRange === '7_DAYS' && diffDays > 7) return false;
+            if (filterDateRange === '30_DAYS' && diffDays > 30) return false;
+          }
+          // Filter Status Paraf
+          if (filterApprovalStatus === 'PENDING' && log.parent_review_status !== 'PENDING') return false;
+          if (filterApprovalStatus === 'APPROVED' && log.parent_review_status !== 'APPROVED') return false;
+
+          // Filter Kualitas Sholat
+          if (filterPrayerStatus === 'PERFECT_5') {
+            const prayers: SholatStatus[] = [log.sholat_subuh, log.sholat_dzuhur, log.sholat_ashar, log.sholat_maghrib, log.sholat_isya];
+            if (!prayers.every(s => s === 'BERJAMAAH')) return false;
+          } else if (filterPrayerStatus === 'HAS_MISSED') {
+            const prayers: SholatStatus[] = [log.sholat_subuh, log.sholat_dzuhur, log.sholat_ashar, log.sholat_maghrib, log.sholat_isya];
+            if (!prayers.some(s => s === 'TERLAMBAT' || s === 'TIDAK_SHOLAT')) return false;
+          }
+
+          // Filter Shaum
+          if (filterFastingStatus === 'FASTING' && log.puasa_type === 'TIDAK_PUASA') return false;
+          if (filterFastingStatus === 'NOT_FASTING' && log.puasa_type !== 'TIDAK_PUASA') return false;
+
+          return true;
+        });
+
+        // Ringkasan Statistik Riwayat
+        const totalApprovedCount = combinedLogs.filter(l => l.parent_review_status === 'APPROVED').length;
+        const totalFastingCount = combinedLogs.filter(l => l.puasa_type !== 'TIDAK_PUASA' && l.puasa_completion === 'PENUH_MAGHRIB').length;
+        const totalStarsAwarded = combinedLogs.reduce((acc, l) => acc + (l.reward_stars_awarded || 0), 0);
 
         const prayerItems = [
           { key: 'sholat_subuh' as const, label: 'Subuh', icon: Sunrise, timeHint: '04:55 WIB', desc: 'Fajar Shodiq', tone: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
@@ -719,15 +827,6 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
           };
         };
 
-        const totalSholatTertib = prayerItems.filter(p => {
-          const s = displayLog[p.key];
-          return s === 'BERJAMAAH' || s === 'MUNFARID_TEPAT';
-        }).length;
-
-        const totalBerjamaah = prayerItems.filter(p => displayLog[p.key] === 'BERJAMAAH').length;
-
-        const puasaData = getPuasaBadge(displayLog.puasa_type, displayLog.puasa_completion);
-
         const quickPraiseChips = [
           'Barakallahu fiik, anak sholih! 🌟',
           'MasyaAllah, pertahankan sholat berjamaah di masjid! 🕌',
@@ -738,362 +837,832 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
         return (
           <div className="bg-white rounded-3xl sm:rounded-4xl border-2 border-emerald-500/25 shadow-lg p-5 sm:p-7 space-y-6 relative overflow-hidden">
-            {/* Top Bar Header */}
-            <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-100">
+            {/* Header + Navigasi Tab (Antrean Paraf vs Laporan Riwayat) */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] sm:text-[11px] font-black uppercase text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300/60">
-                    Mutaba'ah Yaumiyah Harian
+                    Mutaba'ah Yaumiyah
                   </span>
-                  <span className="text-xs font-bold text-slate-500 hidden sm:inline">
-                    &bull; Tanggal: <strong className="text-slate-700">{displayLog.log_date}</strong>
+                  <span className="text-xs font-bold text-slate-500">
+                    &bull; Santri: <strong className="text-slate-800">{currentChild.full_name}</strong>
                   </span>
                 </div>
                 <h3 className="text-lg sm:text-2xl font-black text-slate-800">
-                  Evaluasi Sholat 5 Waktu & Shaum ({currentChild.full_name})
+                  Pemantauan Sholat 5 Waktu & Shaum
                 </h3>
               </div>
 
-              {/* Status Paraf Wali Murid */}
-              <div className="flex items-center gap-2">
-                {displayLog.parent_review_status === 'APPROVED' ? (
-                  <span className="text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 px-3.5 py-1.5 rounded-2xl flex items-center gap-1.5 shadow-2xs">
-                    <CheckCircle className="w-4 h-4 text-emerald-600" />
-                    <span>Telah Disetujui (+{displayLog.reward_stars_awarded || 25} Bintang)</span>
+              {/* Mode Pengalih Antrean vs Laporan Riwayat */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setYaumiyahViewMode('QUEUE')}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${
+                    yaumiyahViewMode === 'QUEUE'
+                      ? 'bg-white text-emerald-800 shadow-sm border border-emerald-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Antrean Menunggu Paraf</span>
+                  {pendingQueueLogs.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-white font-black animate-pulse">
+                      {pendingQueueLogs.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setYaumiyahViewMode('REPORT')}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${
+                    yaumiyahViewMode === 'REPORT'
+                      ? 'bg-white text-emerald-800 shadow-sm border border-emerald-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Laporan & Riwayat Ibadah</span>
+                  <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-200 text-slate-700 font-extrabold">
+                    {combinedLogs.length}
                   </span>
+                </button>
+              </div>
+            </div>
+
+            {/* TAB 1: ANTREAN MENUNGGU PARAF RESMI (SATU KALI APPROVAL) */}
+            {yaumiyahViewMode === 'QUEUE' && (
+              <>
+                {pendingQueueLogs.length === 0 ? (
+                  <div className="py-12 px-6 rounded-3xl bg-gradient-to-b from-emerald-50/60 to-teal-50/30 border-2 border-dashed border-emerald-300 text-center space-y-4">
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto rounded-3xl bg-emerald-500 text-white flex items-center justify-center text-3xl sm:text-4xl shadow-md ring-8 ring-emerald-100">
+                      ✨
+                    </div>
+                    <div className="max-w-md mx-auto space-y-1.5">
+                      <h4 className="text-lg sm:text-xl font-black text-slate-800">
+                        Alhamdulillah! Semua Setoran Telah Diparaf Resmi
+                      </h4>
+                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                        Tidak ada antrean mutaba'ah yang menggantung. Setiap amalan sholat & puasa ananda telah diberikan apresiasi bintang pahala.
+                      </p>
+                    </div>
+                    <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setYaumiyahViewMode('REPORT')}
+                        className="btn-chunky py-2.5 px-5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold rounded-2xl shadow-sm inline-flex items-center gap-2"
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>Buka Laporan & Riwayat Ibadah ({combinedLogs.length} Hari)</span>
+                      </button>
+                    </div>
+                  </div>
                 ) : (
-                  <span className="text-xs font-black text-amber-900 bg-amber-100 border border-amber-300 px-3.5 py-1.5 rounded-2xl flex items-center gap-1.5 shadow-2xs animate-pulse">
-                    <Clock className="w-4 h-4 text-amber-600" />
-                    <span>Menunggu Paraf Wali Murid</span>
-                  </span>
-                )}
-              </div>
-            </div>
+                  <div className="space-y-6">
+                    {pendingQueueLogs.map(log => {
+                      const dateInfo = formatIndonesianDate(log.log_date);
+                      const totalSholatTertib = prayerItems.filter(p => {
+                        const s = log[p.key];
+                        return s === 'BERJAMAAH' || s === 'MUNFARID_TEPAT';
+                      }).length;
+                      const totalBerjamaah = prayerItems.filter(p => log[p.key] === 'BERJAMAAH').length;
+                      const puasaData = getPuasaBadge(log.puasa_type, log.puasa_completion);
 
-            {/* Quick Summary Pill Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Tally Sholat Fardhu */}
-              <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200/90 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black text-base shadow-xs flex-shrink-0">
-                  {totalSholatTertib}/5
-                </div>
-                <div>
-                  <div className="text-xs font-extrabold text-slate-800">Sholat Fardhu Tertib</div>
-                  <div className="text-[11px] font-semibold text-emerald-800">
-                    {totalBerjamaah} Waktu di Masjid 🕌
-                  </div>
-                </div>
-              </div>
+                      return (
+                        <div key={log.id} className="rounded-3xl border-2 border-amber-300 bg-amber-50/20 p-5 sm:p-6 space-y-6 shadow-sm">
+                          {/* Banner Tanggal Aktivitas Sangat Jelas (Muncul di HP & Desktop) */}
+                          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-white border border-amber-200 shadow-2xs">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center font-black flex-shrink-0 shadow-2xs">
+                                <Calendar className="w-5 h-5" />
+                              </div>
+                              <div>
+                                <div className="text-[10px] uppercase font-black tracking-wider text-amber-800">
+                                  Tanggal Aktivitas Ibadah
+                                </div>
+                                <div className="text-sm sm:text-base font-black text-slate-900 flex flex-wrap items-center gap-2">
+                                  <span>{dateInfo.fullDate}</span>
+                                  {dateInfo.isToday && (
+                                    <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-emerald-500 text-white">
+                                      HARI INI
+                                    </span>
+                                  )}
+                                  {dateInfo.isYesterday && (
+                                    <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-amber-500 text-white">
+                                      KEMARIN
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
 
-              {/* Status Puasa */}
-              <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-200/90 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center font-black text-base shadow-xs flex-shrink-0">
-                  🌙
-                </div>
-                <div>
-                  <div className="text-xs font-extrabold text-slate-800">
-                    {displayLog.puasa_type !== 'TIDAK_PUASA' ? displayLog.puasa_type.replace(/_/g, ' ') : 'Tidak Berpuasa'}
-                  </div>
-                  <div className="text-[11px] font-semibold text-sky-800 line-clamp-1">
-                    {displayLog.puasa_completion === 'PENUH_MAGHRIB' ? 'Penuh Sampai Maghrib 🌅' : displayLog.puasa_completion === 'LATIHAN_SETENGAH_HARI' ? 'Latihan Setengah Hari 🌤️' : 'Hari Biasa'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Sunnah & Dzikir */}
-              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/90 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-500 text-amber-950 flex items-center justify-center font-black text-base shadow-xs flex-shrink-0">
-                  <Sparkles className="w-5 h-5 text-amber-950" />
-                </div>
-                <div>
-                  <div className="text-xs font-extrabold text-slate-800">Amalan Sunnah</div>
-                  <div className="text-[11px] font-semibold text-amber-900">
-                    Dhuha: {displayLog.sholat_dhuha_rakaat} Rakaat &bull; Rawatib: {displayLog.sholat_rawatib_count} Rakaat
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* SUB-SECTION A: 5 Waktu Sholat Visual Cards Grid */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
-                  <span>🕌</span>
-                  <span>Setoran Sholat 5 Waktu Ananda</span>
-                </h4>
-                <span className="text-[11px] font-bold text-slate-500">
-                  Disiplin: <strong className="text-emerald-700">{Math.round((totalSholatTertib / 5) * 100)}%</strong>
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                {prayerItems.map(({ key, label, icon: Icon, timeHint, tone }) => {
-                  const status = displayLog[key] as SholatStatus;
-                  const cfg = getSholatBadge(status);
-
-                  return (
-                    <div
-                      key={key}
-                      className={`rounded-2xl p-3.5 border-2 transition-all hover:shadow-sm ${cfg.boxStyle} flex flex-col justify-between`}
-                    >
-                      {/* Prayer Header */}
-                      <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-7 h-7 rounded-lg flex items-center justify-center border ${tone}`}>
-                            <Icon className="w-3.5 h-3.5" />
+                            <span className="text-xs font-black text-amber-900 bg-amber-100 border border-amber-300 px-3.5 py-1.5 rounded-2xl flex items-center gap-1.5">
+                              <Clock className="w-4 h-4 text-amber-600 animate-spin" />
+                              <span>Menunggu Paraf Resmi Sekali</span>
+                            </span>
                           </div>
-                          <div>
-                            <span className="font-black text-sm text-slate-800 block leading-tight">{label}</span>
-                            <span className="text-[10px] text-slate-400 font-semibold">{timeHint}</span>
+
+                          {/* Quick Summary Pill Bar */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200/90 flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black text-base shadow-xs flex-shrink-0">
+                                {totalSholatTertib}/5
+                              </div>
+                              <div>
+                                <div className="text-xs font-extrabold text-slate-800">Sholat Fardhu Tertib</div>
+                                <div className="text-[11px] font-semibold text-emerald-800">
+                                  {totalBerjamaah} Waktu di Masjid 🕌
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-200/90 flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center font-black text-base shadow-xs flex-shrink-0">
+                                🌙
+                              </div>
+                              <div>
+                                <div className="text-xs font-extrabold text-slate-800">
+                                  {log.puasa_type !== 'TIDAK_PUASA' ? log.puasa_type.replace(/_/g, ' ') : 'Tidak Berpuasa'}
+                                </div>
+                                <div className="text-[11px] font-semibold text-sky-800 line-clamp-1">
+                                  {log.puasa_completion === 'PENUH_MAGHRIB' ? 'Penuh Sampai Maghrib 🌅' : log.puasa_completion === 'LATIHAN_SETENGAH_HARI' ? 'Latihan Setengah Hari 🌤️' : 'Hari Biasa'}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/90 flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-amber-500 text-amber-950 flex items-center justify-center font-black text-base shadow-xs flex-shrink-0">
+                                <Sparkles className="w-5 h-5 text-amber-950" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-extrabold text-slate-800">Amalan Sunnah</div>
+                                <div className="text-[11px] font-semibold text-amber-900">
+                                  Dhuha: {log.sholat_dhuha_rakaat} Rakaat &bull; Rawatib: {log.sholat_rawatib_count} Rakaat
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* SUB-SECTION A: 5 Waktu Sholat Visual Cards Grid */}
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <h4 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                                <span>🕌</span>
+                                <span>Pelaksanaan Sholat 5 Waktu</span>
+                              </h4>
+                              <span className="text-[11px] font-bold text-slate-500">
+                                Disiplin: <strong className="text-emerald-700">{Math.round((totalSholatTertib / 5) * 100)}%</strong>
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                              {prayerItems.map(({ key, label, icon: Icon, timeHint, tone }) => {
+                                const status = log[key] as SholatStatus;
+                                const cfg = getSholatBadge(status);
+
+                                return (
+                                  <div
+                                    key={key}
+                                    className={`rounded-2xl p-3.5 border-2 transition-all hover:shadow-sm ${cfg.boxStyle} flex flex-col justify-between`}
+                                  >
+                                    <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
+                                      <div className="flex items-center gap-2">
+                                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center border ${tone}`}>
+                                          <Icon className="w-3.5 h-3.5" />
+                                        </div>
+                                        <div>
+                                          <span className="font-black text-sm text-slate-800 block leading-tight">{label}</span>
+                                          <span className="text-[10px] text-slate-400 font-semibold">{timeHint}</span>
+                                        </div>
+                                      </div>
+                                      <span className="text-base">{cfg.iconEmoji}</span>
+                                    </div>
+
+                                    <div className="pt-2.5 pb-1 space-y-1.5">
+                                      <span className={`text-[11px] px-2 py-0.5 rounded-lg inline-block text-center w-full truncate ${cfg.badgeStyle}`}>
+                                        {cfg.short}
+                                      </span>
+                                      <p className="text-[10px] text-center font-bold text-slate-500 leading-tight">
+                                        {cfg.sub}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* SUB-SECTION B: Sholat Sunnah & Dzikir Bar */}
+                          <div className="rounded-2xl bg-white border border-slate-200/90 p-4 space-y-3">
+                            <div className="flex items-center gap-2 text-xs font-black text-slate-700">
+                              <Sparkles className="w-4 h-4 text-amber-500" />
+                              <span>Rincian Amalan Sunnah & Dzikir Ba'da Sholat</span>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                              {/* Dhuha */}
+                              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+                                <div className="flex items-center gap-1.5 text-amber-800 font-bold mb-1">
+                                  <Sun className="w-3.5 h-3.5 text-amber-500" />
+                                  <span>Sholat Dhuha</span>
+                                </div>
+                                <div className="font-black text-slate-800">
+                                  {log.sholat_dhuha_rakaat > 0 ? `${log.sholat_dhuha_rakaat} Rakaat` : 'Tidak Dhuha'}
+                                </div>
+                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
+                                  log.sholat_dhuha_rakaat > 0 ? 'bg-amber-100 text-amber-900' : 'bg-slate-200 text-slate-500'
+                                }`}>
+                                  {log.sholat_dhuha_rakaat > 0 ? 'Tercapai ☀️' : 'Belum'}
+                                </span>
+                              </div>
+
+                              {/* Rawatib */}
+                              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+                                <div className="flex items-center gap-1.5 text-teal-800 font-bold mb-1">
+                                  <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+                                  <span>Sunnah Rawatib</span>
+                                </div>
+                                <div className="font-black text-slate-800">
+                                  {log.sholat_rawatib_count > 0 ? `${log.sholat_rawatib_count} Rakaat` : 'Tidak Rawatib'}
+                                </div>
+                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
+                                  log.sholat_rawatib_count > 0 ? 'bg-teal-100 text-teal-900' : 'bg-slate-200 text-slate-500'
+                                }`}>
+                                  {log.sholat_rawatib_count > 0 ? 'Qabliyah/Badiyah' : '0 Rakaat'}
+                                </span>
+                              </div>
+
+                              {/* Tahajjud */}
+                              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+                                <div className="flex items-center gap-1.5 text-indigo-800 font-bold mb-1">
+                                  <Moon className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Qiyamul Lail</span>
+                                </div>
+                                <div className="font-black text-slate-800">
+                                  {log.sholat_qiyamul_lail ? 'Melaksanakan' : 'Belum Tahajjud'}
+                                </div>
+                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
+                                  log.sholat_qiyamul_lail ? 'bg-indigo-100 text-indigo-900' : 'bg-slate-200 text-slate-500'
+                                }`}>
+                                  {log.sholat_qiyamul_lail ? 'MasyaAllah 🌙' : 'Istirahat'}
+                                </span>
+                              </div>
+
+                              {/* Dzikir */}
+                              <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
+                                <div className="flex items-center gap-1.5 text-rose-800 font-bold mb-1">
+                                  <Heart className="w-3.5 h-3.5 text-rose-500" />
+                                  <span>Dzikir Ba'da Sholat</span>
+                                </div>
+                                <div className="font-black text-slate-800">
+                                  {log.dzikir_bada_sholat_count > 0 ? `${log.dzikir_bada_sholat_count}x Lengkap` : 'Ringkas'}
+                                </div>
+                                <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
+                                  log.dzikir_bada_sholat_count >= 5 ? 'bg-emerald-100 text-emerald-900' : 'bg-slate-200 text-slate-500'
+                                }`}>
+                                  {log.dzikir_bada_sholat_count >= 5 ? '5 Waktu Tuntas' : `${log.dzikir_bada_sholat_count} Waktu`}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* SUB-SECTION C: Ibadah Puasa (Shaum) Dedicated Showcase */}
+                          <div className={`rounded-3xl p-5 sm:p-6 transition-all ${puasaData.badgeBanner}`}>
+                            <div className="flex flex-wrap items-start justify-between gap-4">
+                              <div className="space-y-1.5 max-w-xl">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-white/20 text-emerald-200 border border-white/20">
+                                    {puasaData.category}
+                                  </span>
+                                  <span className="text-xs font-arabic text-amber-300 font-semibold">
+                                    {puasaData.arabic}
+                                  </span>
+                                </div>
+                                <h4 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+                                  <span>🌙</span>
+                                  <span>{puasaData.title}</span>
+                                </h4>
+                                <p className="text-xs text-emerald-100/90 leading-relaxed font-medium">
+                                  {puasaData.desc}
+                                </p>
+                              </div>
+
+                              <div className="text-left sm:text-right space-y-1.5">
+                                <span className="text-[11px] font-bold text-emerald-200 block">Status Setoran Shaum:</span>
+                                <div className={`px-4 py-2 rounded-2xl text-xs font-black shadow-md inline-block ${puasaData.statusColor}`}>
+                                  {puasaData.statusLabel}
+                                </div>
+                                {puasaData.praise && (
+                                  <p className="text-[11px] font-semibold text-amber-300 max-w-xs">
+                                    {puasaData.praise}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* SUB-SECTION D: Catatan & Refleksi Santri */}
+                          <div className="rounded-2xl p-4 bg-amber-50/70 border-2 border-amber-200/80 flex items-start gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-amber-200 text-amber-900 flex items-center justify-center font-black flex-shrink-0">
+                              💬
+                            </div>
+                            <div className="flex-1 text-xs">
+                              <div className="flex items-center justify-between font-black text-amber-950 mb-1">
+                                <span>Catatan Kejujuran Ananda ({currentChild.full_name}):</span>
+                                <span className="text-[10px] text-amber-800 font-bold">{dateInfo.fullDate}</span>
+                              </div>
+                              <blockquote className="text-slate-700 italic font-medium bg-white/80 p-2.5 rounded-xl border border-amber-200/60">
+                                "{log.child_notes || 'Alhamdulillah hari ini sholat 5 waktu di masjid bersama teman-teman, doakan Hafiz istiqomah ya Abi/Umi!'}"
+                              </blockquote>
+                            </div>
+                          </div>
+
+                          {/* SUB-SECTION E: Parent Paraf & Bintang Reward Action Suite (1-TIME APPROVAL) */}
+                          <div className="rounded-3xl p-5 bg-gradient-to-br from-white to-emerald-50/50 border-2 border-emerald-500/30 space-y-4 shadow-sm">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200/80">
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                                  <CheckCircle className="w-4 h-4" />
+                                </div>
+                                <div>
+                                  <h4 className="text-sm font-black text-slate-800">
+                                    Beri Apresiasi & Paraf Resmi (Approval Sistem Sekali)
+                                  </h4>
+                                  <p className="text-[11px] text-slate-500">
+                                    Pilih jumlah reward bintang dan berikan kata motivasi penuh kasih sayang untuk ananda.
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Star Reward Stepper / Selector */}
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[11px] font-bold text-slate-600 hidden sm:inline">Hadiah:</span>
+                                {[
+                                  { stars: 15, label: '+15 Bintang', desc: 'Tertib' },
+                                  { stars: 25, label: '+25 Bintang', desc: 'Sangat Baik' },
+                                  { stars: 50, label: '+50 Bintang', desc: 'Istimewa' },
+                                ].map(item => (
+                                  <button
+                                    key={item.stars}
+                                    type="button"
+                                    onClick={() => setSelectedRewardStars(item.stars)}
+                                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
+                                      selectedRewardStars === item.stars
+                                        ? 'bg-amber-400 text-amber-950 shadow-xs border-2 border-amber-500 scale-105'
+                                        : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                                    }`}
+                                  >
+                                    ⭐ {item.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Quick Parental Praise Chips */}
+                            <div className="space-y-1.5">
+                              <span className="text-[11px] font-bold text-slate-600">Pilih Kalimat Apresiasi Cepat:</span>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {quickPraiseChips.map(chip => (
+                                  <button
+                                    key={chip}
+                                    type="button"
+                                    onClick={() => setParentFeedbackNote(chip)}
+                                    className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-900 transition-all active:scale-95 shadow-2xs"
+                                  >
+                                    + {chip}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Custom Input Note */}
+                            <div className="space-y-1">
+                              <input
+                                type="text"
+                                placeholder="Tuliskan doa kasih sayang atau nasehat khusus untuk ananda..."
+                                value={parentFeedbackNote}
+                                onChange={(e) => setParentFeedbackNote(e.target.value)}
+                                className="w-full text-xs font-semibold p-3 rounded-2xl border-2 border-emerald-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-2xs text-slate-800"
+                              />
+                            </div>
+
+                            {/* Action Button & Confirmation */}
+                            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                              <div className="text-xs text-slate-500 font-medium">
+                                <span>
+                                  Klik tombol untuk menyetujui mutaba'ah tanggal <strong>{dateInfo.fullDate}</strong>. Setelah disetujui, catatan resmi tersimpan dan otomatis keluar dari antrean pending.
+                                </span>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleApproveIbadah(log.id, selectedRewardStars, parentFeedbackNote)}
+                                className="btn-chunky py-3 px-6 text-xs bg-emerald-600 hover:bg-emerald-500 text-white border-b-4 border-emerald-800 active:border-b-0 shadow-md font-black flex items-center justify-center gap-2 w-full sm:w-auto"
+                              >
+                                <Check className="w-4 h-4" />
+                                <span>Setujui & Beri Paraf Resmi (+{selectedRewardStars} Bintang)</span>
+                              </button>
+                            </div>
                           </div>
                         </div>
-                        <span className="text-base">{cfg.iconEmoji}</span>
-                      </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
 
-                      {/* Status Content */}
-                      <div className="pt-2.5 pb-1 space-y-1.5">
-                        <span className={`text-[11px] px-2 py-0.5 rounded-lg inline-block text-center w-full truncate ${cfg.badgeStyle}`}>
-                          {cfg.short}
-                        </span>
-                        <p className="text-[10px] text-center font-bold text-slate-500 leading-tight">
-                          {cfg.sub}
-                        </p>
-                      </div>
+            {/* TAB 2: LAPORAN & RIWAYAT MUTABA'AH LENGKAP PER TANGGAL (DENGAN FILTER & STATUS RESMI) */}
+            {yaumiyahViewMode === 'REPORT' && (
+              <div className="space-y-6">
+                {/* 1. Ringkasan Statistik */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/90 text-center sm:text-left">
+                    <span className="text-[10px] font-black uppercase text-slate-500 block">Total Hari Mutaba'ah</span>
+                    <div className="text-lg sm:text-2xl font-black text-slate-800 mt-0.5">{combinedLogs.length} Hari</div>
+                    <span className="text-[10px] text-slate-500 font-semibold">Tercatat di sistem</span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200 text-center sm:text-left">
+                    <span className="text-[10px] font-black uppercase text-emerald-800 block">Telah Diparaf Resmi</span>
+                    <div className="text-lg sm:text-2xl font-black text-emerald-700 mt-0.5">{totalApprovedCount} Hari</div>
+                    <span className="text-[10px] text-emerald-700 font-semibold">
+                      {combinedLogs.length > 0 ? `${Math.round((totalApprovedCount / combinedLogs.length) * 100)}% tuntas` : '0%'}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-200 text-center sm:text-left">
+                    <span className="text-[10px] font-black uppercase text-sky-800 block">Shaum Penuh Maghrib</span>
+                    <div className="text-lg sm:text-2xl font-black text-sky-700 mt-0.5">{totalFastingCount} Hari</div>
+                    <span className="text-[10px] text-sky-700 font-semibold">Puasa tuntas</span>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 text-center sm:text-left">
+                    <span className="text-[10px] font-black uppercase text-amber-800 block">Total Bintang Pahala</span>
+                    <div className="text-lg sm:text-2xl font-black text-amber-600 mt-0.5">⭐ {totalStarsAwarded}</div>
+                    <span className="text-[10px] text-amber-700 font-semibold">Apresiasi orang tua</span>
+                  </div>
+                </div>
+
+                {/* 2. Filter Toolbar Lengkap */}
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-black text-slate-700">
+                      <Filter className="w-4 h-4 text-emerald-600" />
+                      <span>Filter Laporan Mutaba'ah Ibadah:</span>
                     </div>
-                  );
-                })}
+                    {(filterDateRange !== 'ALL' || filterApprovalStatus !== 'ALL' || filterPrayerStatus !== 'ALL' || filterFastingStatus !== 'ALL') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFilterDateRange('ALL');
+                          setFilterApprovalStatus('ALL');
+                          setFilterPrayerStatus('ALL');
+                          setFilterFastingStatus('ALL');
+                        }}
+                        className="text-[11px] font-bold text-rose-600 hover:underline"
+                      >
+                        Reset Filter
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
+                    {/* Filter Rentang Tanggal */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Rentang Tanggal:</label>
+                      <select
+                        value={filterDateRange}
+                        onChange={(e) => setFilterDateRange(e.target.value as any)}
+                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      >
+                        <option value="ALL">Semua Tanggal</option>
+                        <option value="7_DAYS">7 Hari Terakhir</option>
+                        <option value="30_DAYS">30 Hari Terakhir</option>
+                      </select>
+                    </div>
+
+                    {/* Filter Status Paraf */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Status Persetujuan:</label>
+                      <select
+                        value={filterApprovalStatus}
+                        onChange={(e) => setFilterApprovalStatus(e.target.value as any)}
+                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      >
+                        <option value="ALL">Semua Status</option>
+                        <option value="APPROVED">Telah Diparaf Resmi (Approved)</option>
+                        <option value="PENDING">Menunggu Paraf (Pending)</option>
+                      </select>
+                    </div>
+
+                    {/* Filter Disiplin Sholat */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Kualitas Sholat:</label>
+                      <select
+                        value={filterPrayerStatus}
+                        onChange={(e) => setFilterPrayerStatus(e.target.value as any)}
+                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      >
+                        <option value="ALL">Semua Kualitas Sholat</option>
+                        <option value="PERFECT_5">5 Waktu Berjamaah (100% Masjid)</option>
+                        <option value="HAS_MISSED">Ada Terlambat / Belum Sholat</option>
+                      </select>
+                    </div>
+
+                    {/* Filter Puasa */}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Ibadah Shaum:</label>
+                      <select
+                        value={filterFastingStatus}
+                        onChange={(e) => setFilterFastingStatus(e.target.value as any)}
+                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      >
+                        <option value="ALL">Semua Hari</option>
+                        <option value="FASTING">Hari Berpuasa (Sunnah/Wajib)</option>
+                        <option value="NOT_FASTING">Hari Tidak Berpuasa</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Daftar Riwayat Laporan Ibadah Per Tanggal */}
+                {filteredHistoryLogs.length === 0 ? (
+                  <div className="py-12 text-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/50 space-y-2">
+                    <p className="text-sm font-black text-slate-600">Tidak ada data riwayat ibadah yang sesuai filter.</p>
+                    <p className="text-xs text-slate-400">Silakan ubah pilihan filter di atas untuk melihat catatan lainnya.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredHistoryLogs.map((log) => {
+                      const dateInfo = formatIndonesianDate(log.log_date);
+                      const isApproved = log.parent_review_status === 'APPROVED';
+
+                      return (
+                        <div
+                          key={log.id}
+                          className={`rounded-2xl border transition-all p-4 space-y-3 ${
+                            isApproved
+                              ? 'bg-white border-slate-200 hover:border-emerald-300 shadow-2xs'
+                              : 'bg-amber-50/40 border-amber-300 shadow-2xs'
+                          }`}
+                        >
+                          {/* Header Bar: Tanggal & Badge Status Terkunci / Pending */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs ${
+                                isApproved ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                <CalendarDays className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-black text-slate-900 flex items-center gap-2">
+                                  <span>{dateInfo.fullDate}</span>
+                                  {dateInfo.isToday && (
+                                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-emerald-500 text-white">
+                                      HARI INI
+                                    </span>
+                                  )}
+                                  {dateInfo.isYesterday && (
+                                    <span className="text-[9px] font-black px-1.5 py-0.2 rounded bg-amber-500 text-white">
+                                      KEMARIN
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-medium">
+                                  ID Log: {log.id}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Badge Status Resmi Terkunci */}
+                            <div className="flex items-center gap-2">
+                              {isApproved ? (
+                                <span className="text-[11px] font-black text-emerald-800 bg-emerald-50 border border-emerald-300 px-3 py-1 rounded-xl flex items-center gap-1.5 shadow-2xs">
+                                  <Lock className="w-3.5 h-3.5 text-emerald-600" />
+                                  <span>Telah Diparaf Resmi (+{log.reward_stars_awarded || 0} ⭐)</span>
+                                </span>
+                              ) : (
+                                <span className="text-[11px] font-black text-amber-900 bg-amber-100 border border-amber-300 px-3 py-1 rounded-xl flex items-center gap-1.5">
+                                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                                  <span>Menunggu Paraf</span>
+                                </span>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => setSelectedDetailLog(log)}
+                                className="text-xs font-black px-3 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1 transition-all"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-slate-500" />
+                                <span>Lihat Rincian</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Sholat Timeline Pills */}
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-[11px]">
+                            {prayerItems.map((p) => {
+                              const status = log[p.key];
+                              const badge = getSholatBadge(status);
+                              return (
+                                <div
+                                  key={p.key}
+                                  className={`p-2 rounded-xl border flex items-center justify-between gap-1 ${
+                                    status === 'BERJAMAAH'
+                                      ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950 font-bold'
+                                      : status === 'MUNFARID_TEPAT'
+                                      ? 'bg-teal-50/70 border-teal-200 text-teal-950 font-bold'
+                                      : status === 'TERLAMBAT'
+                                      ? 'bg-amber-50/80 border-amber-200 text-amber-950 font-bold'
+                                      : 'bg-rose-50/80 border-rose-200 text-rose-950 font-bold'
+                                  }`}
+                                >
+                                  <span className="font-extrabold">{p.label}:</span>
+                                  <span className="text-[10px] truncate">{badge.iconEmoji} {badge.short}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Puasa & Catatan Wali Ringkas */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-lg bg-sky-100 text-sky-900 border border-sky-200">
+                                🌙 {log.puasa_type !== 'TIDAK_PUASA' ? log.puasa_type.replace(/_/g, ' ') : 'Tidak Puasa'}
+                              </span>
+                              {log.puasa_completion === 'PENUH_MAGHRIB' && (
+                                <span className="text-[10px] font-bold text-emerald-700">
+                                  Tuntas Sampai Maghrib 🌅
+                                </span>
+                              )}
+                              {log.sholat_dhuha_rakaat > 0 && (
+                                <span className="text-[10px] text-amber-700 font-bold">
+                                  • Dhuha {log.sholat_dhuha_rakaat} Rakaat
+                                </span>
+                              )}
+                            </div>
+
+                            {log.parent_review_notes && (
+                              <div className="text-[11px] text-slate-600 italic bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200 max-w-md truncate">
+                                💬 "{log.parent_review_notes}"
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
+            )}
+          </div>
+        );
+      })()}
+      </>
+      )}
 
-            {/* SUB-SECTION B: Sholat Sunnah & Dzikir Bar */}
-            <div className="rounded-2xl bg-slate-50/80 border border-slate-200/90 p-4 space-y-3">
-              <div className="flex items-center gap-2 text-xs font-black text-slate-700">
-                <Sparkles className="w-4 h-4 text-amber-500" />
-                <span>Rincian Amalan Sunnah & Dzikir Ba'da Sholat</span>
-              </div>
+      {/* MODAL RINCIAN ARSIP MUTABA'AH IBADAH LENGKAP (READ-ONLY) */}
+      {selectedDetailLog && (() => {
+        const dateInfo = formatIndonesianDate(selectedDetailLog.log_date);
+        const isApproved = selectedDetailLog.parent_review_status === 'APPROVED';
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {/* Dhuha */}
-                <div className="p-2.5 rounded-xl bg-white border border-slate-200/80 text-xs">
-                  <div className="flex items-center gap-1.5 text-amber-800 font-bold mb-1">
-                    <Sun className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Sholat Dhuha</span>
-                  </div>
-                  <div className="font-black text-slate-800">
-                    {displayLog.sholat_dhuha_rakaat > 0 ? `${displayLog.sholat_dhuha_rakaat} Rakaat` : 'Tidak Dhuha'}
-                  </div>
-                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
-                    displayLog.sholat_dhuha_rakaat > 0 ? 'bg-amber-100 text-amber-900' : 'bg-slate-100 text-slate-500'
-                  }`}>
-                    {displayLog.sholat_dhuha_rakaat > 0 ? 'Tercapai ☀️' : 'Belum'}
-                  </span>
-                </div>
-
-                {/* Rawatib */}
-                <div className="p-2.5 rounded-xl bg-white border border-slate-200/80 text-xs">
-                  <div className="flex items-center gap-1.5 text-teal-800 font-bold mb-1">
-                    <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Sunnah Rawatib</span>
-                  </div>
-                  <div className="font-black text-slate-800">
-                    {displayLog.sholat_rawatib_count > 0 ? `${displayLog.sholat_rawatib_count} Rakaat` : 'Tidak Rawatib'}
-                  </div>
-                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
-                    displayLog.sholat_rawatib_count > 0 ? 'bg-teal-100 text-teal-900' : 'bg-slate-100 text-slate-500'
-                  }`}>
-                    {displayLog.sholat_rawatib_count > 0 ? 'Qabliyah/Badiyah' : '0 Rakaat'}
-                  </span>
-                </div>
-
-                {/* Tahajjud */}
-                <div className="p-2.5 rounded-xl bg-white border border-slate-200/80 text-xs">
-                  <div className="flex items-center gap-1.5 text-indigo-800 font-bold mb-1">
-                    <Moon className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Qiyamul Lail</span>
-                  </div>
-                  <div className="font-black text-slate-800">
-                    {displayLog.sholat_qiyamul_lail ? 'Melaksanakan' : 'Belum Tahajjud'}
-                  </div>
-                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
-                    displayLog.sholat_qiyamul_lail ? 'bg-indigo-100 text-indigo-900' : 'bg-slate-100 text-slate-500'
-                  }`}>
-                    {displayLog.sholat_qiyamul_lail ? 'MasyaAllah 🌙' : 'Istirahat'}
-                  </span>
-                </div>
-
-                {/* Dzikir */}
-                <div className="p-2.5 rounded-xl bg-white border border-slate-200/80 text-xs">
-                  <div className="flex items-center gap-1.5 text-rose-800 font-bold mb-1">
-                    <Heart className="w-3.5 h-3.5 text-rose-500" />
-                    <span>Dzikir Ba'da Sholat</span>
-                  </div>
-                  <div className="font-black text-slate-800">
-                    {displayLog.dzikir_bada_sholat_count > 0 ? `${displayLog.dzikir_bada_sholat_count}x Lengkap` : 'Ringkas'}
-                  </div>
-                  <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md inline-block mt-1 ${
-                    displayLog.dzikir_bada_sholat_count >= 5 ? 'bg-emerald-100 text-emerald-900' : 'bg-slate-100 text-slate-500'
-                  }`}>
-                    {displayLog.dzikir_bada_sholat_count >= 5 ? '5 Waktu Tuntas' : `${displayLog.dzikir_bada_sholat_count} Waktu`}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* SUB-SECTION C: Ibadah Puasa (Shaum) Dedicated Showcase */}
-            <div className={`rounded-3xl p-5 sm:p-6 transition-all ${puasaData.badgeBanner}`}>
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-1.5 max-w-xl">
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+            <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-7 shadow-2xl border-2 border-emerald-500/20 space-y-5 max-h-[90vh] overflow-y-auto">
+              {/* Header Modal */}
+              <div className="flex items-start justify-between pb-4 border-b border-slate-100">
+                <div className="space-y-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-white/20 text-emerald-200 border border-white/20">
-                      {puasaData.category}
+                    <span className="text-[10px] font-black uppercase text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full">
+                      Arsip Resmi Mutaba'ah
                     </span>
-                    <span className="text-xs font-arabic text-amber-300 font-semibold">
-                      {puasaData.arabic}
-                    </span>
+                    {isApproved ? (
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-600 text-white flex items-center gap-1">
+                        <Lock className="w-3 h-3" />
+                        Telah Diparaf Resmi
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500 text-white flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        Menunggu Paraf
+                      </span>
+                    )}
                   </div>
-                  <h4 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
-                    <span>🌙</span>
-                    <span>{puasaData.title}</span>
-                  </h4>
-                  <p className="text-xs text-emerald-100/90 leading-relaxed font-medium">
-                    {puasaData.desc}
+                  <h3 className="text-lg font-black text-slate-800">
+                    Rincian Ibadah: {dateInfo.fullDate}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Santri: <strong>{currentChild?.full_name}</strong> &bull; Wali: <strong>{parentProfile.full_name}</strong>
                   </p>
-                </div>
-
-                {/* Target Completion Pill */}
-                <div className="text-left sm:text-right space-y-1.5">
-                  <span className="text-[11px] font-bold text-emerald-200 block">Status Setoran Shaum:</span>
-                  <div className={`px-4 py-2 rounded-2xl text-xs font-black shadow-md inline-block ${puasaData.statusColor}`}>
-                    {puasaData.statusLabel}
-                  </div>
-                  {puasaData.praise && (
-                    <p className="text-[11px] font-semibold text-amber-300 max-w-xs">
-                      {puasaData.praise}
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* SUB-SECTION D: Catatan & Refleksi Santri */}
-            <div className="rounded-2xl p-4 bg-amber-50/70 border-2 border-amber-200/80 flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-200 text-amber-900 flex items-center justify-center font-black flex-shrink-0">
-                💬
-              </div>
-              <div className="flex-1 text-xs">
-                <div className="flex items-center justify-between font-black text-amber-950 mb-1">
-                  <span>Catatan Kejujuran Ananda ({currentChild.full_name}):</span>
-                  <span className="text-[10px] text-amber-800 font-bold">{displayLog.log_date}</span>
-                </div>
-                <blockquote className="text-slate-700 italic font-medium bg-white/80 p-2.5 rounded-xl border border-amber-200/60">
-                  "{displayLog.child_notes || 'Alhamdulillah hari ini sholat 5 waktu di masjid bersama teman-teman, doakan Hafiz istiqomah ya Abi/Umi!'}"
-                </blockquote>
-              </div>
-            </div>
-
-            {/* SUB-SECTION E: Parent Paraf & Bintang Reward Action Suite */}
-            <div className="rounded-3xl p-5 bg-gradient-to-br from-slate-50 to-emerald-50/40 border-2 border-emerald-500/30 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200/80">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
-                    <CheckCircle className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-black text-slate-800">
-                      Beri Apresiasi, Bintang Pahala & Paraf Resmi
-                    </h4>
-                    <p className="text-[11px] text-slate-500">
-                      Pilih jumlah reward bintang dan berikan kata motivasi penuh cinta untuk ananda.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Star Reward Stepper / Selector */}
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-bold text-slate-600 hidden sm:inline">Hadiah:</span>
-                  {[
-                    { stars: 15, label: '+15 Bintang', desc: 'Tertib' },
-                    { stars: 25, label: '+25 Bintang', desc: 'Sangat Baik' },
-                    { stars: 50, label: '+50 Bintang', desc: 'Istimewa' },
-                  ].map(item => (
-                    <button
-                      key={item.stars}
-                      type="button"
-                      onClick={() => setSelectedRewardStars(item.stars)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
-                        selectedRewardStars === item.stars
-                          ? 'bg-amber-400 text-amber-950 shadow-xs border-2 border-amber-500 scale-105'
-                          : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                      }`}
-                    >
-                      ⭐ {item.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Quick Parental Praise Chips */}
-              <div className="space-y-1.5">
-                <span className="text-[11px] font-bold text-slate-600">Pilih Kalimat Apresiasi Cepat:</span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {quickPraiseChips.map(chip => (
-                    <button
-                      key={chip}
-                      type="button"
-                      onClick={() => setParentFeedbackNote(chip)}
-                      className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-50 text-emerald-900 transition-all active:scale-95 shadow-2xs"
-                    >
-                      + {chip}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Custom Input Note */}
-              <div className="space-y-1">
-                <input
-                  type="text"
-                  placeholder="Tuliskan doa kasih sayang atau nasehat khusus untuk ananda..."
-                  value={parentFeedbackNote}
-                  onChange={(e) => setParentFeedbackNote(e.target.value)}
-                  className="w-full text-xs font-semibold p-3 rounded-2xl border-2 border-emerald-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 shadow-2xs text-slate-800"
-                />
-              </div>
-
-              {/* Action Button & Confirmation */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                <div className="text-xs text-slate-500 font-medium">
-                  {displayLog.parent_review_status === 'APPROVED' ? (
-                    <span className="text-emerald-700 font-bold flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      Telah diparaf wali murid pada {displayLog.reviewed_at ? new Date(displayLog.reviewed_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'hari ini'}. Anda dapat memperbarui paraf sewaktu-waktu.
-                    </span>
-                  ) : (
-                    <span>
-                      Klik tombol di kanan untuk memparaf mutaba'ah hari ini & memberikan +{selectedRewardStars} bintang ke kebun pahala ananda.
-                    </span>
-                  )}
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => handleApproveIbadah(displayLog.id, selectedRewardStars, parentFeedbackNote)}
-                  className="btn-chunky py-3 px-6 text-xs bg-emerald-500 hover:bg-emerald-600 text-white border-b-4 border-emerald-700 active:border-b-0 shadow-md font-black flex items-center justify-center gap-2 w-full sm:w-auto"
+                  onClick={() => setSelectedDetailLog(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition-all"
                 >
-                  <Check className="w-4 h-4" />
-                  <span>
-                    {displayLog.parent_review_status === 'APPROVED'
-                      ? `Perbarui Paraf & Hadiahi +${selectedRewardStars} Bintang`
-                      : `Beri Paraf Resmi & Hadiahi +${selectedRewardStars} Bintang Pahala`}
-                  </span>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Sholat 5 Waktu Details */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-600">
+                  Pelaksanaan Sholat Fardhu 5 Waktu
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 text-xs">
+                  {[
+                    { key: 'sholat_subuh' as const, label: 'Subuh' },
+                    { key: 'sholat_dzuhur' as const, label: 'Dzuhur' },
+                    { key: 'sholat_ashar' as const, label: 'Ashar' },
+                    { key: 'sholat_maghrib' as const, label: 'Maghrib' },
+                    { key: 'sholat_isya' as const, label: 'Isya' }
+                  ].map(p => {
+                    const status = selectedDetailLog[p.key];
+                    return (
+                      <div key={p.key} className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-center">
+                        <div className="text-[11px] font-bold text-slate-500">{p.label}</div>
+                        <div className="font-black text-slate-800 text-xs mt-1">
+                          {status === 'BERJAMAAH' ? '🕌 Berjamaah' : status === 'MUNFARID_TEPAT' ? '🏠 Di Rumah' : status === 'TERLAMBAT' ? '⏰ Terlambat' : 'Belum Sholat'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Puasa & Sunnah */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-200">
+                  <div className="text-[10px] font-black uppercase text-sky-800">Ibadah Shaum (Puasa)</div>
+                  <div className="font-black text-slate-800 text-sm mt-1">
+                    {selectedDetailLog.puasa_type !== 'TIDAK_PUASA' ? selectedDetailLog.puasa_type.replace(/_/g, ' ') : 'Tidak Berpuasa'}
+                  </div>
+                  <p className="text-[11px] text-sky-700 mt-1">
+                    Penyelesaian: {selectedDetailLog.puasa_completion === 'PENUH_MAGHRIB' ? 'Penuh Sampai Maghrib 🌅' : selectedDetailLog.puasa_completion === 'LATIHAN_SETENGAH_HARI' ? 'Setengah Hari 🌤️' : 'Hari Biasa'}
+                  </p>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200">
+                  <div className="text-[10px] font-black uppercase text-amber-800">Amalan Sunnah</div>
+                  <div className="text-xs font-bold text-slate-800 mt-1 space-y-0.5">
+                    <div>• Dhuha: {selectedDetailLog.sholat_dhuha_rakaat} Rakaat</div>
+                    <div>• Rawatib: {selectedDetailLog.sholat_rawatib_count} Rakaat</div>
+                    <div>• Qiyamul Lail: {selectedDetailLog.sholat_qiyamul_lail ? 'Melaksanakan 🌙' : 'Tidak'}</div>
+                    <div>• Dzikir Ba'da Sholat: {selectedDetailLog.dzikir_bada_sholat_count} Waktu</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Catatan Ananda & Catatan Wali */}
+              <div className="space-y-3 text-xs">
+                {selectedDetailLog.child_notes && (
+                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="font-extrabold text-slate-700 block mb-1">Catatan Kejujuran Santri:</span>
+                    <p className="italic text-slate-600">"{selectedDetailLog.child_notes}"</p>
+                  </div>
+                )}
+
+                {isApproved ? (
+                  <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-300 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-emerald-900 flex items-center gap-1.5">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        Persetujuan & Paraf Resmi Wali Murid
+                      </span>
+                      <span className="text-[10px] font-bold text-emerald-700">
+                        {formatTimeIndonesian(selectedDetailLog.reviewed_at)}
+                      </span>
+                    </div>
+                    <p className="text-slate-700 font-medium">"{selectedDetailLog.parent_review_notes || 'Alhamdulillah, sholat dan ibadahnya sangat tertib!'}"</p>
+                    <div className="text-[11px] font-black text-amber-700 pt-1">
+                      ⭐ Telah Dihadiahi: +{selectedDetailLog.reward_stars_awarded || 0} Bintang Pahala
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-bold flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                    <span>Catatan ini masih menunggu paraf Anda di tab "Antrean Menunggu Paraf".</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Modal */}
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailLog(null)}
+                  className="btn-chunky py-2 px-5 text-xs bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl"
+                >
+                  Tutup Rincian
                 </button>
               </div>
             </div>
           </div>
         );
       })()}
-      </>
-      )}
 
       {/* MODAL TAMBAH / HUBUNGKAN ANAK KE AKUN ORANG TUA */}
       {showAddChildModal && (
