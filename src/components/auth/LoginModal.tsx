@@ -35,31 +35,9 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
 
   if (!isOpen) return null;
 
-  const handleQuickLogin = async (targetEmail: string, targetName: string) => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(`Memasuki sesi akun ${targetName}...`);
-    try {
-      const existing = await db.user_profiles.where('email').equals(targetEmail).first();
-      const userObj = {
-        id: existing?.id || `user-${Date.now()}`,
-        email: targetEmail,
-        user_metadata: { full_name: existing?.full_name || targetName }
-      };
-      if (onLoginSuccess) {
-        onLoginSuccess(userObj);
-      }
-      setTimeout(() => onClose(), 600);
-    } catch (err: any) {
-      setErrorMsg('Gagal masuk: ' + err.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleGoogleSSO = async () => {
     if (!isSupabaseConfigured) {
-      setErrorMsg('Google SSO memerlukan Supabase Anon Key di file .env. Untuk review langsung, klik salah satu tombol Akun Demo 1-Klik di bawah.');
+      setErrorMsg('Google SSO memerlukan konfigurasi Supabase di file .env. Silakan gunakan form Email & Kata Sandi di bawah.');
       return;
     }
     setIsLoading(true);
@@ -108,7 +86,7 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
           setTimeout(() => onClose(), 1200);
         }
       } else {
-        // Fallback Mode Offline / Demo: Otentikasi langsung ke database lokal Dexie
+        // Fallback Mode Offline: Otentikasi langsung ke database lokal Dexie
         const existing = await db.user_profiles.where('email').equals(email.trim()).first();
         const userObj = {
           id: existing?.id || `user-${Date.now()}`,
@@ -168,30 +146,6 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
               <span>{successMsg}</span>
             </div>
           )}
-
-          {/* Masuk Cepat untuk Akun Utama imranpermadi@gmail.com */}
-          <button
-            type="button"
-            onClick={() => handleQuickLogin('imranpermadi@gmail.com', 'Ustadz Imran Permadi')}
-            className="w-full p-2.5 rounded-2xl bg-emerald-50/80 hover:bg-emerald-100/70 border-2 border-emerald-300/80 text-left transition-all active:scale-98 shadow-2xs flex items-center justify-between"
-          >
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-sm font-black shadow-2xs">
-                🛡️
-              </div>
-              <div>
-                <span className="block text-xs font-black text-slate-800">
-                  Masuk Cepat: Ustadz Imran Permadi
-                </span>
-                <span className="block text-[10px] text-slate-500 font-mono">
-                  imranpermadi@gmail.com (Orang Tua / Admin)
-                </span>
-              </div>
-            </div>
-            <span className="text-[10px] font-bold bg-emerald-200/80 text-emerald-900 px-2 py-0.5 rounded-lg">
-              1-Klik
-            </span>
-          </button>
 
           {/* OPSI 1: Google SSO (Paling Direkomendasikan) */}
           <button

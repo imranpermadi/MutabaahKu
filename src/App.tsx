@@ -17,7 +17,7 @@ import {
   Download,
   X
 } from 'lucide-react';
-import { db, purgeDemoData, ensureStarterChecklists, deleteChildProfile, todayLocal } from './lib/db';
+import { db, purgeDemoData, ensureStarterChecklists, deleteChildProfile, todayLocal, recordChecklistEvaluation, recordSholatPractice, computeAchievementBreakdown, recalculateStudentAchievements } from './lib/db';
 import { isSupabaseConfigured, supabase, executeFullSync, pullRemoteDataFromSupabase, backgroundSync } from './lib/supabase';
 import { linkChildByEmail, unlinkChild } from './lib/linking';
 import { UserRole, UserGender, UserProfile, IbadahDailyLog } from './types/database';
@@ -247,9 +247,23 @@ export function App() {
     ? (studentProfile?.id || (!currentUser ? 'guest-student' : ''))
     : (activeChild?.id || '');
 
+  // Pastikan seluruh 10 tabel relasional (academic_levels, exam_cycles, curriculum_items, content_units, fsrs_memory_states, sholat_learning_progress, mutabaah_logs) selalu terinisialisasi untuk santri aktif
+  useEffect(() => {
+    if (targetStudentId) {
+      ensureStarterChecklists(targetStudentId, activeChild?.current_grade || 1)
+        .then(() => recalculateStudentAchievements(targetStudentId))
+        .catch(console.error);
+    }
+  }, [targetStudentId, activeChild?.current_grade]);
+
   const checklists = useLiveQuery(async () => {
     if (!targetStudentId) return [];
     return db.murojaah_checklists.where('student_id').equals(targetStudentId).toArray();
+  }, [targetStudentId]) || [];
+
+  const sholatProgress = useLiveQuery(async () => {
+    if (!targetStudentId) return [];
+    return db.sholat_learning_progress.where('student_id').equals(targetStudentId).toArray();
   }, [targetStudentId]) || [];
 
   const today = todayLocal();
@@ -261,7 +275,24 @@ export function App() {
 
   const todayIbadahLog = childIbadahLogs.find(l => l.log_date === today);
 
-  const defaultIbadahLog: IbadahDailyLog = {
+  // Kalkulasi Real-Time Bintang & Tetes Air langsung dari pencapaian nyata anak
+  const achievementBreakdown = React.useMemo(
+    () => computeAchievementBreakdown(activeChild, childIbadahLogs, checklists, sholatProgress),
+    [activeChild, childIbadahLogs, checklists, sholatProgress]
+  );
+
+  // Sinkronkan nilai water_drops, star_points, dan unlocked_stickers ke profil anak di DB bila ada perubahan
+  useEffect(() => {
+    if (activeChild?.id && activeChild.id !== 'guest-student') {
+      recalculateStudentAchievements(activeChild.id).catch(console.error);
+    }
+  }, [
+    activeChild?.id,
+    achievementBreakdown.totalWaterAvailable,
+    achievementBreakdown.totalStars
+  ]);
+
+  const defaultIbadahLog: IbadahDailyLog = React.useMemo(() => ({
     id: `log-${activeChild?.id || 'std-1'}-${today}`,
     student_id: activeChild?.id || 'std-1',
     log_date: today,
@@ -279,7 +310,7 @@ export function App() {
     parent_review_status: 'PENDING',
     reward_stars_awarded: 0,
     created_at: new Date().toISOString()
-  };
+  }), [activeChild?.id, today]);
 
   const handleAutoSync = async () => {
     if (isSyncing) return;
@@ -315,20 +346,18 @@ export function App() {
 
   const handleWaterTree = async () => {
     if (!activeChild) return;
-    const newDrops = Math.max(0, activeChild.water_drops - 10);
-    const newLevel = Math.min(5, activeChild.garden_tree_level + 1);
+    if (achievementBreakdown.totalWaterAvailable < 10) return;
+    const newLevel = Math.min(5, (activeChild.garden_tree_level || 1) + 1);
     await db.user_profiles.update(activeChild.id, {
-      water_drops: newDrops,
       garden_tree_level: newLevel
     });
+    await recalculateStudentAchievements(activeChild.id);
   };
 
-  const handleStepCompleted = async () => {
+  const handleStepCompleted = async (stepCode?: string) => {
     if (!activeChild) return;
-    await db.user_profiles.update(activeChild.id, {
-      star_points: activeChild.star_points + 10,
-      water_drops: activeChild.water_drops + 5
-    });
+    await recordSholatPractice(activeChild.id, stepCode);
+    await recalculateStudentAchievements(activeChild.id);
   };
 
   const handlePassIncrement = async (id: string) => {
@@ -340,21 +369,15 @@ export function App() {
       child_self_claim: true,
       parent_review_status: 'PENDING'
     });
+    if (activeChild) {
+      await recalculateStudentAchievements(activeChild.id);
+    }
   };
 
   const handleApproveChecklist = async (id: string, grade: 'L' | 'BL', notes: string) => {
-    await db.murojaah_checklists.update(id, {
-      parent_review_status: 'APPROVED',
-      mutabaah_grade: grade,
-      parent_notes: notes,
-      reviewed_at: new Date().toISOString()
-    });
-
+    await recordChecklistEvaluation(id, grade, notes, 'PARENT');
     if (activeChild) {
-      await db.user_profiles.update(activeChild.id, {
-        star_points: activeChild.star_points + 20,
-        water_drops: activeChild.water_drops + 10
-      });
+      await recalculateStudentAchievements(activeChild.id);
     }
   };
 
@@ -389,15 +412,15 @@ export function App() {
     }
 
     if (activeChild) {
-      await db.user_profiles.update(activeChild.id, {
-        star_points: (activeChild.star_points || 0) + stars,
-        water_drops: (activeChild.water_drops || 0) + 15
-      });
+      await recalculateStudentAchievements(activeChild.id);
     }
   };
 
   const handleSaveIbadah = async (updated: any) => {
     await db.ibadah_daily_logs.put(updated);
+    if (activeChild) {
+      await recalculateStudentAchievements(activeChild.id);
+    }
   };
 
   const handleToggleGender = async () => {
@@ -470,13 +493,13 @@ export function App() {
                 {/* Star Points */}
                 <div className="flex items-center gap-1 bg-emerald-50 text-emerald-950 font-black text-xs px-2 py-1 rounded-xl border border-emerald-200">
                   <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-500" />
-                  <span>{activeChild.star_points || 0}</span>
+                  <span>{achievementBreakdown.totalStars}</span>
                 </div>
 
                 {/* Water Drops */}
                 <div className="hidden sm:flex items-center gap-1 bg-sky-50 text-sky-950 font-black text-xs px-2 py-1 rounded-xl border border-sky-200">
                   <Droplets className="w-3.5 h-3.5 fill-sky-400 text-sky-500" />
-                  <span>{activeChild.water_drops || 0}</span>
+                  <span>{achievementBreakdown.totalWaterAvailable}</span>
                 </div>
               </div>
             )
@@ -648,10 +671,11 @@ export function App() {
 
               {/* Virtual Garden Widget */}
               <PahalaGarden
-                treeLevel={activeChild?.garden_tree_level || 2}
-                waterDrops={activeChild?.water_drops || 42}
-                starPoints={activeChild?.star_points || 135}
-                unlockedStickers={activeChild?.unlocked_stickers || ['sticker_welcome_star', 'sticker_kabah']}
+                treeLevel={activeChild?.garden_tree_level ?? 1}
+                waterDrops={achievementBreakdown.totalWaterAvailable}
+                starPoints={achievementBreakdown.totalStars}
+                unlockedStickers={activeChild?.unlocked_stickers || ['sticker_welcome_star']}
+                breakdown={achievementBreakdown}
                 onWaterTree={handleWaterTree}
               />
 
@@ -802,6 +826,7 @@ export function App() {
                   setSelectedChildId(remaining[0]?.id || '');
                 }}
                 pendingChecklists={checklists.filter(c => c.parent_review_status === 'PENDING')}
+                allChecklists={checklists}
                 pendingIbadahLog={todayIbadahLog}
                 allIbadahLogs={childIbadahLogs}
                 onApproveChecklist={handleApproveChecklist}

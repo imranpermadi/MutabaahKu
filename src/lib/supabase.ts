@@ -92,7 +92,19 @@ let queueSyncing = false;
  * Item berstatus FAILED (mis. karena offline) ikut dicoba ulang.
  */
 export async function syncOfflineQueueToSupabase(): Promise<{ synced: number; failed: number }> {
-  if (!supabase || queueSyncing) {
+  if (!supabase) {
+    return { synced: 0, failed: 0 };
+  }
+  // Pastikan semua perubahan terbaru di memori (debounce 400ms) langsung masuk ke sync_queue sebelum push/pull
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (pendingChanges.size > 0) {
+    await flushPendingChanges(false);
+  }
+
+  if (queueSyncing) {
     return { synced: 0, failed: 0 };
   }
   queueSyncing = true;
@@ -150,6 +162,8 @@ async function processSyncQueue(): Promise<{ synced: number; failed: number }> {
 /**
  * Menarik seluruh data 10 tabel dari Supabase Cloud ke IndexedDB Dexie lokal
  * Menjamin zero data loss saat pengguna berpindah perangkat (ganti HP / tablet).
+ * PENTING: Record lokal yang sedang diubah / belum tersinkron (PENDING/FAILED)
+ * dilindungi agar TIDAK tertimpa oleh data lama dari Cloud.
  */
 export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
   pulledCount: number;
@@ -158,6 +172,24 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
   if (!supabase) {
     return { pulledCount: 0, tables: {} };
   }
+
+  // Dorong semua perubahan lokal terlebih dahulu sebelum menarik dari cloud
+  await syncOfflineQueueToSupabase();
+
+  // Kumpulkan daftar record lokal yang belum berhasil ter-push ke cloud agar tidak tertimpa data lama
+  const unsyncedQueue = await db.sync_queue.where('status').anyOf('PENDING', 'FAILED').toArray();
+  const protectedKeys = new Set<string>();
+  for (const q of unsyncedQueue) {
+    protectedKeys.add(`${q.table_name}:${q.record_id}`);
+  }
+  for (const key of pendingChanges.keys()) {
+    protectedKeys.add(key);
+  }
+
+  const filterSafeRows = <T extends { id: string }>(tableName: string, rows: T[] | null | undefined): T[] => {
+    if (!rows || rows.length === 0) return [];
+    return rows.filter(r => !protectedKeys.has(`${tableName}:${r.id}`));
+  };
 
   const tableCounts: Record<string, number> = {};
   let totalPulled = 0;
@@ -175,9 +207,12 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
     if (profileErr) throw profileErr;
 
     if (profiles && profiles.length > 0) {
-      await db.user_profiles.bulkPut(profiles);
-      tableCounts['user_profiles'] = profiles.length;
-      totalPulled += profiles.length;
+      const safeProfiles = filterSafeRows('user_profiles', profiles);
+      if (safeProfiles.length > 0) {
+        await db.user_profiles.bulkPut(safeProfiles);
+      }
+      tableCounts['user_profiles'] = safeProfiles.length;
+      totalPulled += safeProfiles.length;
 
       // Ambil seluruh student_id yang terkait (termasuk anak dari profil orang tua ini)
       const userIds = profiles.map(p => p.id);
@@ -194,8 +229,9 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
           .from('user_profiles')
           .select('*')
           .in('id', linkedParentIds);
-        if (linkedParents && linkedParents.length > 0) {
-          await db.user_profiles.bulkPut(linkedParents);
+        const safeLinkedParents = filterSafeRows('user_profiles', linkedParents);
+        if (safeLinkedParents.length > 0) {
+          await db.user_profiles.bulkPut(safeLinkedParents);
         }
       }
 
@@ -207,7 +243,10 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
           .select('*')
           .in('parent_id', parentIds);
         if (childProfiles && childProfiles.length > 0) {
-          await db.user_profiles.bulkPut(childProfiles);
+          const safeChildren = filterSafeRows('user_profiles', childProfiles);
+          if (safeChildren.length > 0) {
+            await db.user_profiles.bulkPut(safeChildren);
+          }
           childProfiles.forEach(c => {
             if (!studentIds.includes(c.id)) studentIds.push(c.id);
           });
@@ -221,10 +260,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('academic_levels')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (academicLevels && academicLevels.length > 0) {
-        await db.academic_levels.bulkPut(academicLevels);
-        tableCounts['academic_levels'] = academicLevels.length;
-        totalPulled += academicLevels.length;
+      const safeLevels = filterSafeRows('academic_levels', academicLevels);
+      if (safeLevels.length > 0) {
+        await db.academic_levels.bulkPut(safeLevels);
+        tableCounts['academic_levels'] = safeLevels.length;
+        totalPulled += safeLevels.length;
       }
 
       // 3. Siklus Ujian (exam_cycles)
@@ -232,10 +272,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('exam_cycles')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (examCycles && examCycles.length > 0) {
-        await db.exam_cycles.bulkPut(examCycles);
-        tableCounts['exam_cycles'] = examCycles.length;
-        totalPulled += examCycles.length;
+      const safeCycles = filterSafeRows('exam_cycles', examCycles);
+      if (safeCycles.length > 0) {
+        await db.exam_cycles.bulkPut(safeCycles);
+        tableCounts['exam_cycles'] = safeCycles.length;
+        totalPulled += safeCycles.length;
       }
 
       // 4. Item Kurikulum (curriculum_items)
@@ -243,21 +284,24 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('curriculum_items')
         .select('*')
         .in('student_id', allRelevantStudentIds);
+      const safeCurriculum = filterSafeRows('curriculum_items', curriculumItems);
+      if (safeCurriculum.length > 0) {
+        await db.curriculum_items.bulkPut(safeCurriculum);
+        tableCounts['curriculum_items'] = safeCurriculum.length;
+        totalPulled += safeCurriculum.length;
+      }
       if (curriculumItems && curriculumItems.length > 0) {
-        await db.curriculum_items.bulkPut(curriculumItems);
-        tableCounts['curriculum_items'] = curriculumItems.length;
-        totalPulled += curriculumItems.length;
-
         // Pull unit konten terkait curriculum items
         const currItemIds = curriculumItems.map(c => c.id);
         const { data: contentUnits } = await supabase
           .from('content_units')
           .select('*')
           .in('curriculum_item_id', currItemIds);
-        if (contentUnits && contentUnits.length > 0) {
-          await db.content_units.bulkPut(contentUnits);
-          tableCounts['content_units'] = contentUnits.length;
-          totalPulled += contentUnits.length;
+        const safeUnits = filterSafeRows('content_units', contentUnits);
+        if (safeUnits.length > 0) {
+          await db.content_units.bulkPut(safeUnits);
+          tableCounts['content_units'] = safeUnits.length;
+          totalPulled += safeUnits.length;
         }
       }
 
@@ -266,10 +310,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('murojaah_checklists')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (checklists && checklists.length > 0) {
-        await db.murojaah_checklists.bulkPut(checklists);
-        tableCounts['murojaah_checklists'] = checklists.length;
-        totalPulled += checklists.length;
+      const safeChecklists = filterSafeRows('murojaah_checklists', checklists);
+      if (safeChecklists.length > 0) {
+        await db.murojaah_checklists.bulkPut(safeChecklists);
+        tableCounts['murojaah_checklists'] = safeChecklists.length;
+        totalPulled += safeChecklists.length;
       }
 
       // 6. Progres Belajar Sholat (sholat_learning_progress)
@@ -277,10 +322,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('sholat_learning_progress')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (sholatProgress && sholatProgress.length > 0) {
-        await db.sholat_learning_progress.bulkPut(sholatProgress);
-        tableCounts['sholat_learning_progress'] = sholatProgress.length;
-        totalPulled += sholatProgress.length;
+      const safeSholat = filterSafeRows('sholat_learning_progress', sholatProgress);
+      if (safeSholat.length > 0) {
+        await db.sholat_learning_progress.bulkPut(safeSholat);
+        tableCounts['sholat_learning_progress'] = safeSholat.length;
+        totalPulled += safeSholat.length;
       }
 
       // 7. Catatan Ibadah Harian (ibadah_daily_logs)
@@ -288,10 +334,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('ibadah_daily_logs')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (ibadahLogs && ibadahLogs.length > 0) {
-        await db.ibadah_daily_logs.bulkPut(ibadahLogs);
-        tableCounts['ibadah_daily_logs'] = ibadahLogs.length;
-        totalPulled += ibadahLogs.length;
+      const safeIbadahLogs = filterSafeRows('ibadah_daily_logs', ibadahLogs);
+      if (safeIbadahLogs.length > 0) {
+        await db.ibadah_daily_logs.bulkPut(safeIbadahLogs);
+        tableCounts['ibadah_daily_logs'] = safeIbadahLogs.length;
+        totalPulled += safeIbadahLogs.length;
       }
 
       // 8. FSRS Memory States (fsrs_memory_states)
@@ -299,10 +346,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('fsrs_memory_states')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (fsrsStates && fsrsStates.length > 0) {
-        await db.fsrs_memory_states.bulkPut(fsrsStates);
-        tableCounts['fsrs_memory_states'] = fsrsStates.length;
-        totalPulled += fsrsStates.length;
+      const safeFsrs = filterSafeRows('fsrs_memory_states', fsrsStates);
+      if (safeFsrs.length > 0) {
+        await db.fsrs_memory_states.bulkPut(safeFsrs);
+        tableCounts['fsrs_memory_states'] = safeFsrs.length;
+        totalPulled += safeFsrs.length;
       }
 
       // 9. Mutabaah Logs (mutabaah_logs)
@@ -310,10 +358,11 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
         .from('mutabaah_logs')
         .select('*')
         .in('student_id', allRelevantStudentIds);
-      if (mutabaahLogs && mutabaahLogs.length > 0) {
-        await db.mutabaah_logs.bulkPut(mutabaahLogs);
-        tableCounts['mutabaah_logs'] = mutabaahLogs.length;
-        totalPulled += mutabaahLogs.length;
+      const safeMutabaahLogs = filterSafeRows('mutabaah_logs', mutabaahLogs);
+      if (safeMutabaahLogs.length > 0) {
+        await db.mutabaah_logs.bulkPut(safeMutabaahLogs);
+        tableCounts['mutabaah_logs'] = safeMutabaahLogs.length;
+        totalPulled += safeMutabaahLogs.length;
       }
     }
   } catch (err: any) {
@@ -370,16 +419,12 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
   }
 
   try {
-    // Langkah 1: Push antrean offline
+    // Langkah 1: Push antrean offline terlebih dahulu
     const pushQueueResult = await syncOfflineQueueToSupabase();
     let totalPushed = pushQueueResult.synced;
 
-    // Langkah 2: Pull data terbaru dari cloud DULU, supaya snapshot lokal yang usang
-    // tidak menimpa setoran / paraf terbaru dari perangkat lain.
-    const pullResult = await pullRemoteDataFromSupabase(userEmail);
-
-    // Langkah 3: Push snapshot lokal untuk seluruh 10 TABEL ke Supabase
-    // 1. Profil Pengguna
+    // Langkah 2: Push snapshot lokal untuk seluruh 10 TABEL ke Supabase terlebih dahulu
+    // agar pilihan terbaru di perangkat ini tidak tertimpa data lama dari cloud
     const localProfiles = await db.user_profiles.toArray();
     if (localProfiles.length > 0) {
       try {
@@ -390,7 +435,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 2. Tingkat Kelas Akademik
     const localLevels = await db.academic_levels.toArray();
     if (localLevels.length > 0) {
       try {
@@ -401,7 +445,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 3. Siklus Ujian
     const localCycles = await db.exam_cycles.toArray();
     if (localCycles.length > 0) {
       try {
@@ -412,7 +455,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 4. Item Kurikulum Hafalan
     const localCurriculum = await db.curriculum_items.toArray();
     if (localCurriculum.length > 0) {
       try {
@@ -423,7 +465,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 5. Unit Konten (Ayat & Matan)
     const localUnits = await db.content_units.toArray();
     if (localUnits.length > 0) {
       try {
@@ -434,7 +475,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 6. Ceklis Muroja'ah (termasuk rekaman suara & grade)
     const localChecklists = await db.murojaah_checklists.toArray();
     if (localChecklists.length > 0) {
       try {
@@ -445,7 +485,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 7. Catatan Ibadah Yaumiyah
     const localIbadah = await db.ibadah_daily_logs.toArray();
     if (localIbadah.length > 0) {
       try {
@@ -456,7 +495,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 8. Progres Belajar Sholat 13 Rukun
     const localSholat = await db.sholat_learning_progress.toArray();
     if (localSholat.length > 0) {
       try {
@@ -467,7 +505,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 9. State Memori FSRS-6
     const localFsrs = await db.fsrs_memory_states.toArray();
     if (localFsrs.length > 0) {
       try {
@@ -478,7 +515,6 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // 10. Log Setoran Ujian
     const localLogs = await db.mutabaah_logs.toArray();
     if (localLogs.length > 0) {
       try {
@@ -489,7 +525,8 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // Pull sudah dijalankan pada Langkah 2
+    // Langkah 3: Pull data terbaru dari cloud (record lokal yang belum tersinkron tetap dilindungi)
+    const pullResult = await pullRemoteDataFromSupabase(userEmail);
 
     // Simpan timestamp sinkronisasi terakhir di browser
     localStorage.setItem('mutabaahku_last_synced', timestamp);
@@ -538,7 +575,7 @@ const AUTO_SYNC_TABLES = [
 const pendingChanges = new Map<string, { table: string; id: string; deleted: boolean }>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-async function flushPendingChanges() {
+async function flushPendingChanges(autoPush = true) {
   flushTimer = null;
   const changes = Array.from(pendingChanges.values());
   pendingChanges.clear();
@@ -571,7 +608,7 @@ async function flushPendingChanges() {
     }
   }
 
-  if (navigator.onLine) {
+  if (autoPush && navigator.onLine) {
     syncOfflineQueueToSupabase().catch(console.error);
   }
 }
@@ -579,7 +616,7 @@ async function flushPendingChanges() {
 function scheduleChange(table: string, id: string, deleted: boolean) {
   pendingChanges.set(`${table}:${id}`, { table, id, deleted });
   if (!flushTimer) {
-    flushTimer = setTimeout(flushPendingChanges, 400);
+    flushTimer = setTimeout(() => flushPendingChanges(true), 400);
   }
 }
 

@@ -12,20 +12,18 @@ import {
   AlertCircle, 
   ArrowLeft,
   Server,
-  Users,
   Layers,
   Sparkles,
   Mail,
   ChevronDown,
-  BookOpen,
   Calendar,
-  Award,
   Check,
   FileText,
-  GraduationCap
+  GraduationCap,
+  Info
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { db } from '../../lib/db';
+import { db, ensureStarterChecklists, syncChecklistToRelationalTables } from '../../lib/db';
 
 interface AdminDashboardProps {
   currentUserEmail?: string;
@@ -46,18 +44,210 @@ type TableName =
   | 'fsrs_memory_states'
   | 'mutabaah_logs';
 
-const TABLES: { name: TableName; label: string; description: string }[] = [
-  { name: 'user_profiles', label: 'Profil Pengguna', description: 'Data akun siswa & orang tua, streak, saldo bintang' },
-  { name: 'academic_levels', label: 'Tingkat Kelas SDIT', description: 'Jenjang kelas 1 sampai 6 SDIT' },
-  { name: 'exam_cycles', label: 'Siklus Ujian', description: 'PTS 1/2, MID, dan PAS' },
-  { name: 'curriculum_items', label: 'Item Kurikulum', description: 'Materi hafalan Qur\'an, Hadis, Doa, Sholat' },
-  { name: 'content_units', label: 'Unit Konten', description: 'Ayat, matan Arab berharakat, terjemahan & dalil' },
-  { name: 'murojaah_checklists', label: 'Ceklis Muroja\'ah', description: 'Status hafalan siswa dan verifikasi orang tua' },
-  { name: 'ibadah_daily_logs', label: 'Mutaba\'ah Yaumiyah', description: 'Catatan sholat 5 waktu, sunnah & puasa' },
-  { name: 'sholat_learning_progress', label: 'Progres 13 Rukun Sholat', description: 'Status belajar gerakan sholat shahih' },
-  { name: 'fsrs_memory_states', label: 'State Memori FSRS-6', description: 'Stabilitas & jadwal pengulangan ilmiah' },
-  { name: 'mutabaah_logs', label: 'Log Setoran Ujian', description: 'Nilai Lancar (L) / Belum Lancar (BL)' }
+interface TableMeta {
+  name: TableName;
+  label: string;
+  emoji: string;
+  group: 'MASTER_KURIKULUM' | 'AKTIVITAS_SANTRI' | 'EVALUASI_SISTEM';
+  groupLabel: string;
+  description: string;
+  maintainedFrom: string;
+  accentClass: string;
+}
+
+const TABLES: TableMeta[] = [
+  // GROUP 1: MASTER KURIKULUM & AKADEMIK
+  {
+    name: 'academic_levels',
+    label: 'Tingkat Kelas SDIT',
+    emoji: '🎓',
+    group: 'MASTER_KURIKULUM',
+    groupLabel: '📚 Master Kurikulum & Akademik',
+    description: 'Jenjang kelas aktif santri (Kelas 1 s/d 6 SDIT) & tahun ajaran.',
+    maintainedFrom: 'Otomatis saat Link Anak & dikelola di Portal Orang Tua (Profil/Kelas Anak)',
+    accentClass: 'from-emerald-500/20 to-teal-500/10 border-emerald-500/40 text-emerald-300'
+  },
+  {
+    name: 'exam_cycles',
+    label: 'Siklus Ujian (PTS / PAS)',
+    emoji: '📅',
+    group: 'MASTER_KURIKULUM',
+    groupLabel: '📚 Master Kurikulum & Akademik',
+    description: 'Jadwal siklus ujian sekolah: PTS 1 Ganjil, PAS 1, PTS 2 Genap, dan PAT/UKK.',
+    maintainedFrom: 'Otomatis 4 Siklus Standar SDIT & dikelola di Portal Orang Tua -> Kelola Materi',
+    accentClass: 'from-purple-500/20 to-indigo-500/10 border-purple-500/40 text-purple-300'
+  },
+  {
+    name: 'curriculum_items',
+    label: 'Item Kurikulum',
+    emoji: '📖',
+    group: 'MASTER_KURIKULUM',
+    groupLabel: '📚 Master Kurikulum & Akademik',
+    description: 'Daftar induk materi hafalan Al-Qur\'an Juz 30, Hadis Shahih, dan Doa Harian.',
+    maintainedFrom: 'Dikelola Orang Tua di Portal Orang Tua -> Tab "Kelola Materi & Kurikulum"',
+    accentClass: 'from-sky-500/20 to-cyan-500/10 border-sky-500/40 text-sky-300'
+  },
+  {
+    name: 'content_units',
+    label: 'Unit Konten (Ayat & Matan)',
+    emoji: '📜',
+    group: 'MASTER_KURIKULUM',
+    groupLabel: '📚 Master Kurikulum & Akademik',
+    description: 'Teks Arab Uthmani berharakat, transliterasi Latin, terjemahan Indonesia & dalil.',
+    maintainedFrom: 'Tersinkronisasi otomatis saat Orang Tua menambah/mengubah materi di Portal Ortu',
+    accentClass: 'from-teal-500/20 to-emerald-500/10 border-teal-500/40 text-teal-300'
+  },
+
+  // GROUP 2: TARGET & AKTIVITAS HARIAN SANTRI
+  {
+    name: 'murojaah_checklists',
+    label: 'Ceklis Muroja\'ah Hafalan',
+    emoji: '✅',
+    group: 'AKTIVITAS_SANTRI',
+    groupLabel: '🕌 Target & Aktivitas Harian Santri',
+    description: 'Lembar target pengulangan hafalan anak, rekaman suara, dan status paraf orang tua.',
+    maintainedFrom: 'Materi ditambah dari Portal Ortu -> Diulang Anak -> Diparaf Orang Tua',
+    accentClass: 'from-amber-500/20 to-orange-500/10 border-amber-500/40 text-amber-300'
+  },
+  {
+    name: 'ibadah_daily_logs',
+    label: 'Mutaba\'ah Yaumiyah',
+    emoji: '🕌',
+    group: 'AKTIVITAS_SANTRI',
+    groupLabel: '🕌 Target & Aktivitas Harian Santri',
+    description: 'Catatan harian sholat fardhu 5 waktu, sunnah rawatib/dhuha, dan puasa.',
+    maintainedFrom: 'Diisi Anak di tab Tracker Ibadah -> Disetujui 1x oleh Orang Tua',
+    accentClass: 'from-emerald-500/20 to-green-500/10 border-emerald-500/40 text-emerald-300'
+  },
+  {
+    name: 'sholat_learning_progress',
+    label: 'Progres 13 Rukun Sholat',
+    emoji: '🧎',
+    group: 'AKTIVITAS_SANTRI',
+    groupLabel: '🕌 Target & Aktivitas Harian Santri',
+    description: 'Status latihan gerakan 2D, hafalan bacaan, dan skor kuis 13 Rukun Sholat.',
+    maintainedFrom: 'Otomatis tercatat saat Anak berlatih di menu "13 Rukun Sholat" & Kuis',
+    accentClass: 'from-cyan-500/20 to-sky-500/10 border-cyan-500/40 text-cyan-300'
+  },
+
+  // GROUP 3: EVALUASI, AKUN & MESIN MEMORI
+  {
+    name: 'user_profiles',
+    label: 'Profil Pengguna (Ortu & Anak)',
+    emoji: '👤',
+    group: 'EVALUASI_SISTEM',
+    groupLabel: '🧠 Evaluasi, Akun & Mesin Memori',
+    description: 'Data akun Google SSO orang tua & santri, relasi email, streak, dan saldo bintang.',
+    maintainedFrom: 'Otomatis saat Login Google SSO & fitur Hubungkan Akun Anak',
+    accentClass: 'from-indigo-500/20 to-violet-500/10 border-indigo-500/40 text-indigo-300'
+  },
+  {
+    name: 'mutabaah_logs',
+    label: 'Log Setoran & Ujian',
+    emoji: '🏅',
+    group: 'EVALUASI_SISTEM',
+    groupLabel: '🧠 Evaluasi, Akun & Mesin Memori',
+    description: 'Arsip riwayat penilaian mutaba\'ah resmi: Lancar (L) / Belum Lancar (BL) & catatan tajwid.',
+    maintainedFrom: 'Otomatis tercatat setiap kali Orang Tua memparaf hafalan (L / BL)',
+    accentClass: 'from-rose-500/20 to-pink-500/10 border-rose-500/40 text-rose-300'
+  },
+  {
+    name: 'fsrs_memory_states',
+    label: 'State Memori FSRS-6',
+    emoji: '🧠',
+    group: 'EVALUASI_SISTEM',
+    groupLabel: '🧠 Evaluasi, Akun & Mesin Memori',
+    description: 'Parameter algoritma Spaced Repetition (Stabilitas, Kesulitan, Jadwal Ulang / Next Due).',
+    maintainedFrom: 'Otomatis dihitung ulang saat hafalan diparaf Lancar (L) atau Belum Lancar (BL)',
+    accentClass: 'from-fuchsia-500/20 to-purple-500/10 border-fuchsia-500/40 text-fuchsia-300'
+  }
 ];
+
+// Komponen Custom Dropdown Elegan (Pengganti <select> bawaan browser yang kaku)
+interface CustomDropdownOption {
+  value: string | number;
+  label: string;
+  sublabel?: string;
+  badge?: string;
+}
+
+function ElegantSelect({
+  value,
+  options,
+  onChange,
+  placeholder = 'Pilih opsi...'
+}: {
+  value: string | number;
+  options: CustomDropdownOption[];
+  onChange: (val: any) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find(o => String(o.value) === String(value)) || options[0];
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500/60 text-left flex items-center justify-between gap-2 transition-all focus:outline-none focus:border-emerald-500"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-bold text-white truncate">
+            {selected ? selected.label : placeholder}
+          </div>
+          {selected?.sublabel && (
+            <div className="text-[10px] text-emerald-400 font-mono truncate">
+              {selected.sublabel}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {selected?.badge && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-300 border border-emerald-500/30">
+              {selected.badge}
+            </span>
+          )}
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-180 text-emerald-400' : ''}`} />
+        </div>
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 right-0 mt-1.5 z-50 bg-slate-900 border-2 border-emerald-500/40 rounded-2xl shadow-2xl max-h-60 overflow-y-auto divide-y divide-slate-800/80 p-1">
+            {options.map(opt => {
+              const isSelected = String(opt.value) === String(value);
+              return (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between gap-2 transition-all ${
+                    isSelected
+                      ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
+                      : 'text-slate-200 hover:bg-slate-800/80'
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold truncate">{opt.label}</div>
+                    {opt.sublabel && (
+                      <div className="text-[10px] text-slate-400 font-mono truncate">{opt.sublabel}</div>
+                    )}
+                  </div>
+                  {isSelected && <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProps) {
   const isAuthorized = currentUserEmail && AUTHORIZED_ADMINS.includes(currentUserEmail.toLowerCase());
@@ -65,9 +255,13 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
   const [activeTable, setActiveTable] = useState<TableName>('user_profiles');
   const [records, setRecords] = useState<any[]>([]);
   const [userProfiles, setUserProfiles] = useState<any[]>([]);
+  const [tableCounts, setTableCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Custom Mobile / Tablet Table Explorer Drawer (Pengganti <select> browser)
+  const [isTablePickerOpen, setIsTablePickerOpen] = useState(false);
 
   // Modal State for Create / Edit
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -79,6 +273,46 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
     acc[u.id] = { email: u.email || 'tanpa-email', name: u.full_name || 'Tanpa Nama', role: u.role };
     return acc;
   }, {} as Record<string, { email: string; name: string; role: string }>);
+
+  // Hitung jumlah baris di seluruh 10 tabel agar tampil informatif di pemilih tabel
+  const refreshAllTableCounts = async () => {
+    const counts: Record<string, number> = {};
+    for (const t of TABLES) {
+      try {
+        const localCount = await (db as any)[t.name].count();
+        counts[t.name] = localCount;
+      } catch {
+        counts[t.name] = 0;
+      }
+    }
+    setTableCounts(counts);
+  };
+
+  // Sinkronkan & lengkapi seluruh 10 tabel relasional untuk semua siswa terdaftar
+  const handleSyncAllRelationalTables = async (silent = false) => {
+    if (!silent) setIsLoading(true);
+    try {
+      const allUsers = await db.user_profiles.toArray();
+      const students = allUsers.filter(u => u.role === 'STUDENT');
+      for (const s of students) {
+        await ensureStarterChecklists(s.id, s.current_grade || 1);
+      }
+      await refreshAllTableCounts();
+      if (!silent) {
+        await fetchTableData(activeTable);
+        setStatusMsg({
+          type: 'success',
+          text: `Seluruh 10 tabel relasional berhasil disinkronkan untuk ${students.length} santri aktif!`
+        });
+      }
+    } catch (err: any) {
+      if (!silent) {
+        setStatusMsg({ type: 'error', text: err.message || 'Gagal menyinkronkan tabel.' });
+      }
+    } finally {
+      if (!silent) setIsLoading(false);
+    }
+  };
 
   // Fetch all user profiles for email linking
   const fetchProfiles = async () => {
@@ -124,6 +358,7 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
       }
 
       setRecords(dataToUse);
+      await refreshAllTableCounts();
     } catch (err: any) {
       console.warn('Error fetching admin table:', err.message);
       setStatusMsg({ type: 'error', text: err.message || 'Gagal memuat data.' });
@@ -134,8 +369,10 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
 
   useEffect(() => {
     if (isAuthorized) {
-      fetchProfiles();
-      fetchTableData(activeTable);
+      handleSyncAllRelationalTables(true).then(() => {
+        fetchProfiles();
+        fetchTableData(activeTable);
+      });
     }
   }, [activeTable, isAuthorized]);
 
@@ -159,6 +396,9 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         }
 
         await (db as any)[activeTable].put(updatedRecord);
+        if (activeTable === 'murojaah_checklists') {
+          await syncChecklistToRelationalTables(updatedRecord as any);
+        }
         setStatusMsg({ type: 'success', text: `Data [${editingRecord.id}] berhasil diperbarui!` });
       } else {
         // CREATE
@@ -174,7 +414,10 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         }
 
         await (db as any)[activeTable].put(newRecord);
-        setStatusMsg({ type: 'success', text: `Data baru berhasil ditambahkan!` });
+        if (activeTable === 'murojaah_checklists') {
+          await syncChecklistToRelationalTables(newRecord as any);
+        }
+        setStatusMsg({ type: 'success', text: `Data baru berhasil ditambahkan ke ${activeTable}!` });
       }
 
       setIsEditorOpen(false);
@@ -238,7 +481,8 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         student_id: defaultStudent?.id || '',
         curriculum_title: '',
         category: 'HADITH',
-        grade_level: 1,
+        grade_level: defaultStudent?.current_grade || 1,
+        exam_cycle_id: 'PTS_1',
         target_pass_count: 5,
         completed_pass_count: 0,
         mutabaah_grade: 'BL',
@@ -250,16 +494,16 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
     } else if (activeTable === 'academic_levels') {
       defaults = {
         student_id: defaultStudent?.id || '',
-        grade_level: 1,
+        grade_level: defaultStudent?.current_grade || 1,
         academic_year: '2025/2026',
         is_active: true
       };
     } else if (activeTable === 'exam_cycles') {
       defaults = {
         student_id: defaultStudent?.id || '',
-        level_id: 'level-grade-1',
+        level_id: `level-${defaultStudent?.id || 'std'}-grade-1`,
         exam_type: 'PTS_1',
-        exam_title: 'Ujian Tengah Semester (PTS) Ganjil',
+        exam_title: 'PTS 1 — Penilaian Tengah Semester Ganjil',
         exam_date: new Date().toISOString().split('T')[0],
         target_retention: 0.90
       };
@@ -269,11 +513,11 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         title: '',
         category: 'QURAN',
         is_mastered: false,
-        exam_cycle_id: 'cycle-pts-1'
+        exam_cycle_id: 'PTS_1'
       };
     } else if (activeTable === 'content_units') {
       defaults = {
-        curriculum_item_id: 'curr-an-naba',
+        curriculum_item_id: 'curr-an-nas',
         sequence_num: 1,
         arabic_uthmani: '',
         latin_text: '',
@@ -309,7 +553,7 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
     } else if (activeTable === 'fsrs_memory_states') {
       defaults = {
         student_id: defaultStudent?.id || '',
-        unit_id: 'unit-an-naba-01',
+        unit_id: 'unit-an-nas-01',
         track_type: 'SABAQ',
         difficulty: 4.0,
         stability: 2.5,
@@ -321,7 +565,7 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         student_id: defaultStudent?.id || '',
         logged_by_role: 'PARENT',
         official_mutabaah_status: 'L',
-        fsrs_rating: 3,
+        fsrs_rating: 4,
         parent_verified: true,
         tajwid_makhraj_notes: 'Makhraj huruf & tajwid mutqin',
         created_at: new Date().toISOString()
@@ -350,6 +594,14 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
     const linkedEmail = (rec.student_id ? userEmailMap[rec.student_id]?.email : '') || '';
     return str.includes(searchQuery.toLowerCase()) || linkedEmail.toLowerCase().includes(searchQuery.toLowerCase());
   });
+
+  const activeTableMeta = TABLES.find(t => t.name === activeTable) || TABLES[0];
+  const studentOptions: CustomDropdownOption[] = userProfiles.map(u => ({
+    value: u.id,
+    label: `${u.gender === 'PUTRI' ? '👧' : '👦'} ${u.full_name}`,
+    sublabel: u.email || u.id,
+    badge: u.role
+  }));
 
   // JIKA BUKAN ADMIN RESMI
   if (!isAuthorized) {
@@ -383,8 +635,8 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans">
       {/* Top Admin Header */}
-      <header className="bg-slate-900 border-b border-slate-800 px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="bg-slate-900 border-b border-slate-800 px-3 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2.5 flex-shrink-0">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={onClose}
             className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all active:scale-95 flex items-center gap-1.5 text-xs font-bold"
@@ -399,7 +651,7 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
             </div>
             <div>
               <h1 className="font-black text-sm sm:text-base text-white tracking-tight flex items-center gap-2">
-                MutabaahKu Data Console
+                <span>MutabaahKu Data Console</span>
                 <span className="text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
                   LIVE CRUD
                 </span>
@@ -412,18 +664,29 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         </div>
 
         {/* Action Right */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button
+            onClick={() => handleSyncAllRelationalTables(false)}
+            disabled={isLoading}
+            title="Lengkapi & Sinkronkan otomatis seluruh 10 tabel relasional untuk semua santri"
+            className="px-2.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Sinkronkan 10 Tabel</span>
+          </button>
+
           <button
             onClick={() => fetchTableData(activeTable)}
             disabled={isLoading}
-            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95"
+            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-all active:scale-95"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-400' : ''}`} />
-            <span className="hidden sm:inline">Refresh Data</span>
+            <span className="hidden sm:inline">Refresh</span>
           </button>
+
           <button
             onClick={openCreateModal}
-            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+            className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 transition-all shadow-md active:scale-95"
           >
             <Plus className="w-4 h-4" />
             <span>Tambah Data</span>
@@ -431,50 +694,201 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         </div>
       </header>
 
-      {/* Mobile Table Selector Dropdown (Shown on mobile devices) */}
-      <div className="md:hidden bg-slate-900/90 border-b border-slate-800 px-4 py-2.5 flex items-center gap-2 flex-shrink-0">
-        <Database className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-        <span className="text-xs font-bold text-slate-400 flex-shrink-0">Tabel:</span>
-        <select
-          value={activeTable}
-          onChange={(e) => setActiveTable(e.target.value as TableName)}
-          className="flex-1 bg-slate-950 text-emerald-300 text-xs font-black p-2 rounded-xl border border-slate-800 focus:outline-none focus:border-emerald-500"
+      {/* CUSTOM MOBILE & TABLET TABLE SELECTOR BAR (Menggantikan <select> bawaan browser yang jelek) */}
+      <div className="md:hidden bg-slate-900/95 border-b border-slate-800 px-3.5 py-2.5 flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => setIsTablePickerOpen(true)}
+          className="w-full p-3 rounded-2xl bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-950/40 border-2 border-emerald-500/40 hover:border-emerald-400 flex items-center justify-between gap-3 text-left shadow-lg transition-all active:scale-[0.99]"
         >
-          {TABLES.map(t => (
-            <option key={t.name} value={t.name}>
-              {t.label} ({t.name})
-            </option>
-          ))}
-        </select>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-xl flex-shrink-0">
+              {activeTableMeta.emoji}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400">
+                  Tabel Aktif
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold">
+                  {tableCounts[activeTable] ?? records.length} Data
+                </span>
+              </div>
+              <div className="text-xs sm:text-sm font-black text-white truncate">
+                {activeTableMeta.label}
+              </div>
+              <div className="text-[10px] font-mono text-slate-400 truncate">
+                {activeTableMeta.name}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 text-xs font-black flex-shrink-0">
+            <Layers className="w-3.5 h-3.5" />
+            <span>Pilih Tabel</span>
+            <ChevronDown className="w-3.5 h-3.5" />
+          </div>
+        </button>
       </div>
+
+      {/* MODAL / DRAWER PEMILIH TABEL ELEGAN & INFORMATIF (UNTUK MOBILE & DESKTOP) */}
+      {isTablePickerOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 w-full max-w-2xl rounded-t-3xl sm:rounded-3xl border-t-2 sm:border-2 border-emerald-500/40 flex flex-col max-h-[88vh] shadow-2xl overflow-hidden">
+            {/* Sheet Header */}
+            <div className="px-5 py-4 bg-slate-950/90 border-b border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-sm sm:text-base text-white">
+                    Pilih Tabel Database (10 Tabel Relasional)
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Ketuk tabel untuk melihat data, sumber sinkronisasi, dan tempat pengelolaannya
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTablePickerOpen(false)}
+                className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Categorized Table List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-5">
+              {(['MASTER_KURIKULUM', 'AKTIVITAS_SANTRI', 'EVALUASI_SISTEM'] as const).map(groupKey => {
+                const groupItems = TABLES.filter(t => t.group === groupKey);
+                return (
+                  <div key={groupKey} className="space-y-2.5">
+                    <div className="text-[11px] font-black uppercase tracking-wider text-emerald-400 px-1 flex items-center justify-between">
+                      <span>{groupItems[0]?.groupLabel}</span>
+                      <span className="text-[10px] font-mono text-slate-500">{groupItems.length} Tabel</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2.5">
+                      {groupItems.map(t => {
+                        const isSelected = activeTable === t.name;
+                        const count = tableCounts[t.name] ?? 0;
+
+                        return (
+                          <button
+                            key={t.name}
+                            type="button"
+                            onClick={() => {
+                              setActiveTable(t.name);
+                              setIsTablePickerOpen(false);
+                            }}
+                            className={`w-full text-left p-3.5 rounded-2xl border-2 transition-all flex items-start gap-3.5 ${
+                              isSelected
+                                ? 'bg-gradient-to-r from-emerald-950/90 to-slate-900 border-emerald-400 shadow-lg ring-2 ring-emerald-500/20'
+                                : 'bg-slate-950/70 hover:bg-slate-800/70 border-slate-800/90'
+                            }`}
+                          >
+                            <div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${t.accentClass} border flex items-center justify-center text-xl flex-shrink-0 mt-0.5`}>
+                              {t.emoji}
+                            </div>
+
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="font-black text-xs sm:text-sm text-white truncate">
+                                  {t.label}
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-shrink-0">
+                                  <span className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-full border ${
+                                    count > 0
+                                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                      : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                  }`}>
+                                    {count} Data
+                                  </span>
+                                  {isSelected && (
+                                    <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center">
+                                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="text-[10px] font-mono text-emerald-400/90">
+                                {t.name}
+                              </div>
+
+                              <p className="text-[11px] text-slate-300 leading-snug">
+                                {t.description}
+                              </p>
+
+                              <div className="pt-1 flex items-center gap-1.5 text-[10px] text-amber-300/90 font-semibold">
+                                <span>📍 Sumber Data:</span>
+                                <span className="text-slate-300">{t.maintainedFrom}</span>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Admin Workspace (Sidebar on Desktop + Full Responsive Table) */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Table Selector Sidebar (Hidden on mobile, visible on md+) */}
-        <aside className="hidden md:block w-64 bg-slate-900/60 border-r border-slate-800/80 p-3 overflow-y-auto space-y-1 flex-shrink-0">
-          <div className="px-2 py-2 text-[10px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5 text-emerald-500" />
-            <span>Tabel Database (10)</span>
-          </div>
-
-          {TABLES.map(t => (
-            <button
-              key={t.name}
-              onClick={() => setActiveTable(t.name)}
-              className={`w-full text-left p-2.5 rounded-xl transition-all text-xs font-bold flex flex-col ${
-                activeTable === t.name
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
-              }`}
-            >
-              <span className="font-extrabold">{t.label}</span>
-              <span className={`text-[10px] font-mono mt-0.5 truncate ${
-                activeTable === t.name ? 'text-emerald-100' : 'text-slate-500'
-              }`}>
-                {t.name}
-              </span>
-            </button>
-          ))}
+        {/* Left Categorized Table Selector Sidebar (Visible on md+) */}
+        <aside className="hidden md:block w-72 bg-slate-900/60 border-r border-slate-800/80 p-3 overflow-y-auto space-y-4 flex-shrink-0">
+          {(['MASTER_KURIKULUM', 'AKTIVITAS_SANTRI', 'EVALUASI_SISTEM'] as const).map(groupKey => {
+            const groupItems = TABLES.filter(t => t.group === groupKey);
+            return (
+              <div key={groupKey} className="space-y-1">
+                <div className="px-2 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-400/90">
+                  {groupItems[0]?.groupLabel}
+                </div>
+                {groupItems.map(t => {
+                  const isSelected = activeTable === t.name;
+                  const count = tableCounts[t.name] ?? 0;
+                  return (
+                    <button
+                      key={t.name}
+                      onClick={() => setActiveTable(t.name)}
+                      className={`w-full text-left p-2.5 rounded-xl transition-all text-xs flex items-center justify-between gap-2 border ${
+                        isSelected
+                          ? 'bg-emerald-600/25 border-emerald-500/60 text-white shadow-sm'
+                          : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="text-base flex-shrink-0">{t.emoji}</span>
+                        <div className="min-w-0">
+                          <div className="font-extrabold truncate text-white">{t.label}</div>
+                          <div className={`text-[10px] font-mono truncate ${
+                            isSelected ? 'text-emerald-300' : 'text-slate-500'
+                          }`}>
+                            {t.name}
+                          </div>
+                        </div>
+                      </div>
+                      <span className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-full flex-shrink-0 ${
+                        isSelected
+                          ? 'bg-emerald-500 text-slate-950'
+                          : count > 0
+                          ? 'bg-slate-800 text-emerald-400'
+                          : 'bg-slate-800 text-amber-400'
+                      }`}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
         </aside>
 
         {/* Right Content Area: Responsive Data Table */}
@@ -491,26 +905,43 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
             </div>
           )}
 
-          {/* Table Header & Search */}
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-3 flex-shrink-0">
-            <div>
-              <h2 className="font-black text-base sm:text-lg text-white">
-                {TABLES.find(t => t.name === activeTable)?.label}
-              </h2>
-              <p className="text-xs text-slate-400 font-mono">
-                {activeTable} &bull; <strong className="text-emerald-400">{filteredRecords.length} records</strong>
-              </p>
+          {/* Informative Table Architecture & Source Banner */}
+          <div className="mb-3 p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+            <div className="flex items-start gap-3 max-w-2xl">
+              <div className={`w-10 h-10 rounded-2xl bg-gradient-to-br ${activeTableMeta.accentClass} border flex items-center justify-center text-xl flex-shrink-0`}>
+                {activeTableMeta.emoji}
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-black text-sm sm:text-base text-white">
+                    {activeTableMeta.label}
+                  </h2>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-slate-800 text-emerald-400 border border-slate-700">
+                    {activeTableMeta.name}
+                  </span>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    {filteredRecords.length} Baris Data
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300">
+                  {activeTableMeta.description}
+                </p>
+                <div className="text-[11px] text-amber-300/95 font-semibold flex items-center gap-1.5 pt-0.5">
+                  <Info className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                  <span>Alur & Maintain Data: <strong className="text-white">{activeTableMeta.maintainedFrom}</strong></span>
+                </div>
+              </div>
             </div>
 
             {/* Search Box */}
-            <div className="relative flex items-center w-full sm:w-72">
+            <div className="relative flex items-center w-full sm:w-64">
               <Search className="w-4 h-4 text-slate-500 absolute left-3 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Cari kata / email pengguna..."
+                placeholder="Cari kata / email santri..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full text-xs font-semibold pl-9 pr-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-emerald-500"
+                className="w-full text-xs font-semibold pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-emerald-500"
               />
             </div>
           </div>
@@ -523,22 +954,37 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                 <span className="text-xs font-bold">Mengambil data dari database...</span>
               </div>
             ) : filteredRecords.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-slate-500 gap-2 p-4 text-center">
-                <Database className="w-8 h-8 opacity-40 text-emerald-500" />
-                <span className="text-xs font-bold">Tidak ada data di tabel {activeTable}</span>
-                <button
-                  onClick={openCreateModal}
-                  className="mt-2 px-3.5 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-500 flex items-center gap-1.5"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Tambah Record Pertama</span>
-                </button>
+              <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-3 p-6 text-center max-w-md mx-auto">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-2xl">
+                  {activeTableMeta.emoji}
+                </div>
+                <div className="space-y-1">
+                  <div className="text-sm font-black text-white">Belum Ada Data di {activeTableMeta.label}</div>
+                  <p className="text-xs text-slate-400">
+                    {activeTableMeta.maintainedFrom}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <button
+                    onClick={() => handleSyncAllRelationalTables(false)}
+                    className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Isi Otomatis dari Data Santri</span>
+                  </button>
+                  <button
+                    onClick={openCreateModal}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-500 flex items-center gap-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tambah Manual</span>
+                  </button>
+                </div>
               </div>
             ) : (
               <table className="w-full text-left text-xs text-slate-300">
                 <thead className="bg-slate-900 text-slate-400 text-[11px] font-mono uppercase tracking-wider sticky top-0 border-b border-slate-800 z-10">
                   <tr>
-                    {/* Render table columns dynamically based on activeTable */}
                     {activeTable === 'user_profiles' && (
                       <>
                         <th className="py-3 px-4">Nama & Pengguna</th>
@@ -566,7 +1012,7 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                       <>
                         <th className="py-3 px-4">Judul Kurikulum</th>
                         <th className="py-3 px-4">Email Siswa Terkait</th>
-                        <th className="py-3 px-4">Kategori</th>
+                        <th className="py-3 px-4">Kategori & Siklus</th>
                         <th className="py-3 px-4">Status Master</th>
                         <th className="py-3 px-4 text-right">Aksi</th>
                       </>
@@ -659,7 +1105,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
 
                     return (
                       <tr key={rec.id} className="hover:bg-slate-800/40 transition-colors">
-                        {/* 1. USER PROFILES ROW */}
                         {activeTable === 'user_profiles' && (
                           <>
                             <td className="py-3 px-4 font-bold text-white flex items-center gap-2">
@@ -691,7 +1136,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 2. MUROJAAH CHECKLISTS ROW */}
                         {activeTable === 'murojaah_checklists' && (
                           <>
                             <td className="py-3 px-4 font-bold text-white">
@@ -709,7 +1153,7 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                                 {rec.category}
                               </span>
                               <span className="text-[10px] font-bold text-slate-400">
-                                Kls {rec.grade_level || 1}
+                                Kls {rec.grade_level || 1} &bull; {rec.exam_cycle_id || 'PTS_1'}
                               </span>
                             </td>
                             <td className="py-3 px-4 font-mono font-bold text-emerald-400">
@@ -736,7 +1180,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 3. CURRICULUM ITEMS ROW */}
                         {activeTable === 'curriculum_items' && (
                           <>
                             <td className="py-3 px-4 font-bold text-white">
@@ -750,17 +1193,19 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                               </span>
                             </td>
                             <td className="py-3 px-4">
-                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 mr-1.5">
                                 {rec.category}
+                              </span>
+                              <span className="text-[10px] font-mono text-purple-300">
+                                {rec.exam_cycle_id || 'PTS_1'}
                               </span>
                             </td>
                             <td className="py-3 px-4 font-mono text-emerald-400 font-bold">
-                              {rec.is_mastered ? '✅ Mutqin' : '⏳ Proses'}
+                              {rec.is_mastered ? '✅ Mutqin (L)' : '⏳ Proses Hafalan'}
                             </td>
                           </>
                         )}
 
-                        {/* 4. CONTENT UNITS ROW */}
                         {activeTable === 'content_units' && (
                           <>
                             <td className="py-3 px-4 font-mono font-bold text-emerald-400">
@@ -779,7 +1224,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 5. IBADAH DAILY LOGS ROW */}
                         {activeTable === 'ibadah_daily_logs' && (
                           <>
                             <td className="py-3 px-4 font-mono font-bold text-white">
@@ -805,7 +1249,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 6. ACADEMIC LEVELS ROW */}
                         {activeTable === 'academic_levels' && (
                           <>
                             <td className="py-3 px-4 font-bold text-white flex items-center gap-2">
@@ -831,7 +1274,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 7. EXAM CYCLES ROW */}
                         {activeTable === 'exam_cycles' && (
                           <>
                             <td className="py-3 px-4 font-bold text-white">
@@ -861,7 +1303,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 8. SHOLAT LEARNING PROGRESS ROW */}
                         {activeTable === 'sholat_learning_progress' && (
                           <>
                             <td className="py-3 px-4 font-bold text-white">
@@ -900,7 +1341,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 9. FSRS MEMORY STATES ROW */}
                         {activeTable === 'fsrs_memory_states' && (
                           <>
                             <td className="py-3 px-4 font-bold font-mono text-emerald-300">
@@ -934,7 +1374,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* 10. MUTABAAH LOGS ROW */}
                         {activeTable === 'mutabaah_logs' && (
                           <>
                             <td className="py-3 px-4 font-mono text-slate-300">
@@ -974,7 +1413,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                           </>
                         )}
 
-                        {/* ACTIONS COLUMN */}
                         <td className="py-3 px-4 text-right space-x-1 whitespace-nowrap">
                           <button
                             onClick={() => openEditModal(rec)}
@@ -1001,14 +1439,14 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
         </main>
       </div>
 
-      {/* FORM MODAL (CREATE / EDIT) - HUMAN-FRIENDLY FORM INPUTS, BUKAN SQL / RAW JSON EDITOR */}
+      {/* FORM MODAL (CREATE / EDIT) DENGAN CUSTOM ELEGANT DROPDOWN (TANPA <select> BROWSER) */}
       {isEditorOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
           <div className="bg-slate-900 w-full max-w-xl rounded-3xl border-2 border-emerald-500/40 p-5 sm:p-6 flex flex-col max-h-[92vh] shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800">
               <h3 className="font-black text-sm sm:text-base text-white flex items-center gap-2">
                 <FileText className="w-4 h-4 text-emerald-400" />
-                <span>{editingRecord ? `Ubah Data [${activeTable}]` : `Tambah Data Baru [${activeTable}]`}</span>
+                <span>{editingRecord ? `Ubah Data [${activeTableMeta.label}]` : `Tambah Data [${activeTableMeta.label}]`}</span>
               </h3>
               <button
                 onClick={() => setIsEditorOpen(false)}
@@ -1019,7 +1457,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
             </div>
 
             <form onSubmit={handleSaveRecord} className="my-4 flex-1 overflow-y-auto space-y-3.5 text-xs pr-1">
-              {/* 1. USER PROFILES FORM */}
               {activeTable === 'user_profiles' && (
                 <>
                   <div>
@@ -1045,39 +1482,39 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Peran Pengguna (Role) *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.role || 'STUDENT'}
-                        onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="STUDENT">Siswa / Santri (STUDENT)</option>
-                        <option value="PARENT">Orang Tua / Wali (PARENT)</option>
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, role: val })}
+                        options={[
+                          { value: 'STUDENT', label: '👦 Siswa / Santri', sublabel: 'STUDENT' },
+                          { value: 'PARENT', label: '👨‍👩‍👧 Orang Tua / Wali', sublabel: 'PARENT' }
+                        ]}
+                      />
                     </div>
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Jenis Kelamin *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.gender || 'PUTRA'}
-                        onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="PUTRA">👦 Putra (Koko & Peci)</option>
-                        <option value="PUTRI">👧 Putri (Mukena)</option>
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, gender: val })}
+                        options={[
+                          { value: 'PUTRA', label: '👦 Putra (Koko & Peci)', sublabel: 'PUTRA' },
+                          { value: 'PUTRI', label: '👧 Putri (Mukena)', sublabel: 'PUTRI' }
+                        ]}
+                      />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Tingkat Kelas SD</label>
-                      <select
+                      <label className="font-bold text-slate-300 block mb-1">Tingkat Kelas SDIT</label>
+                      <ElegantSelect
                         value={formData.current_grade || 1}
-                        onChange={(e) => setFormData({ ...formData, current_grade: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        {[1, 2, 3, 4, 5, 6].map(g => (
-                          <option key={g} value={g}>Kelas {g} SD</option>
-                        ))}
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, current_grade: Number(val) })}
+                        options={[1, 2, 3, 4, 5, 6].map(g => ({
+                          value: g,
+                          label: `Kelas ${g} SDIT`,
+                          badge: `Level ${g}`
+                        }))}
+                      />
                     </div>
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Nama Sekolah</label>
@@ -1092,7 +1529,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                 </>
               )}
 
-              {/* 2. MUROJAAH CHECKLISTS FORM */}
               {activeTable === 'murojaah_checklists' && (
                 <>
                   <div>
@@ -1107,90 +1543,59 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                   </div>
                   <div>
                     <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Kategori *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.category || 'HADITH'}
-                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="HADITH">📜 Hadis Nabi</option>
-                        <option value="DOA">🤲 Doa Harian</option>
-                        <option value="QURAN">📖 Al-Qur'an</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Kelas SD</label>
-                      <select
-                        value={formData.grade_level || 3}
-                        onChange={(e) => setFormData({ ...formData, grade_level: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        {[1, 2, 3, 4, 5, 6].map(g => (
-                          <option key={g} value={g}>Kelas {g} SD</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Progres Setoran (Selesai)</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        value={formData.completed_pass_count || 0}
-                        onChange={(e) => setFormData({ ...formData, completed_pass_count: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                        onChange={(val) => setFormData({ ...formData, category: val })}
+                        options={[
+                          { value: 'QURAN', label: '📖 Al-Qur\'an Juz 30', badge: 'QURAN' },
+                          { value: 'HADITH', label: '📜 Hadis Shahih', badge: 'HADITH' },
+                          { value: 'DOA', label: '🤲 Doa Harian', badge: 'DOA' }
+                        ]}
                       />
                     </div>
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Target Ulangan (Maksimal)</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={formData.target_pass_count || 5}
-                        onChange={(e) => setFormData({ ...formData, target_pass_count: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                      <label className="font-bold text-slate-300 block mb-1">Kelas SD</label>
+                      <ElegantSelect
+                        value={formData.grade_level || 1}
+                        onChange={(val) => setFormData({ ...formData, grade_level: Number(val) })}
+                        options={[1, 2, 3, 4, 5, 6].map(g => ({
+                          value: g,
+                          label: `Kelas ${g} SDIT`
+                        }))}
                       />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Status Paraf Ortu</label>
-                      <select
+                      <ElegantSelect
                         value={formData.parent_review_status || 'PENDING'}
-                        onChange={(e) => setFormData({ ...formData, parent_review_status: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="PENDING">Menunggu Paraf (PENDING)</option>
-                        <option value="APPROVED">Disetujui / Diparaf (APPROVED)</option>
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, parent_review_status: val })}
+                        options={[
+                          { value: 'PENDING', label: '⏳ Menunggu Paraf', badge: 'PENDING' },
+                          { value: 'APPROVED', label: '✅ Telah Diparaf Resmi', badge: 'APPROVED' }
+                        ]}
+                      />
                     </div>
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Nilai Mutaba'ah</label>
-                      <select
+                      <ElegantSelect
                         value={formData.mutabaah_grade || 'BL'}
-                        onChange={(e) => setFormData({ ...formData, mutabaah_grade: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="L">Lancar (L)</option>
-                        <option value="BL">Belum Lancar (BL)</option>
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, mutabaah_grade: val })}
+                        options={[
+                          { value: 'L', label: '🌟 Lancar / Mutqin (L)', badge: 'L' },
+                          { value: 'BL', label: '🔄 Belum Lancar (BL)', badge: 'BL' }
+                        ]}
+                      />
                     </div>
                   </div>
                   <div>
@@ -1206,7 +1611,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                 </>
               )}
 
-              {/* 3. CURRICULUM ITEMS FORM */}
               {activeTable === 'curriculum_items' && (
                 <>
                   <div>
@@ -1221,46 +1625,42 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                   </div>
                   <div>
                     <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Kategori *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.category || 'QURAN'}
-                        onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="QURAN">📖 Al-Qur'an</option>
-                        <option value="HADITH">📜 Hadis Nabi</option>
-                        <option value="DOA">🤲 Doa Harian</option>
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-2 pt-6">
-                      <input
-                        type="checkbox"
-                        id="is_mastered"
-                        checked={formData.is_mastered || false}
-                        onChange={(e) => setFormData({ ...formData, is_mastered: e.target.checked })}
-                        className="w-4 h-4 rounded text-emerald-600"
+                        onChange={(val) => setFormData({ ...formData, category: val })}
+                        options={[
+                          { value: 'QURAN', label: '📖 Al-Qur\'an' },
+                          { value: 'HADITH', label: '📜 Hadis Nabi' },
+                          { value: 'DOA', label: '🤲 Doa Harian' }
+                        ]}
                       />
-                      <label htmlFor="is_mastered" className="font-bold text-slate-300">Sudah Mutqin (Mastered)</label>
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-300 block mb-1">Siklus Ujian *</label>
+                      <ElegantSelect
+                        value={formData.exam_cycle_id || 'PTS_1'}
+                        onChange={(val) => setFormData({ ...formData, exam_cycle_id: val })}
+                        options={[
+                          { value: 'PTS_1', label: 'PTS 1 (Semester Ganjil)' },
+                          { value: 'PAS_1', label: 'PAS 1 (Akhir Ganjil)' },
+                          { value: 'PTS_2', label: 'PTS 2 (Semester Genap)' },
+                          { value: 'PAS_2', label: 'PAT / UKK (Kenaikan Kelas)' }
+                        ]}
+                      />
                     </div>
                   </div>
                 </>
               )}
 
-              {/* 4. CONTENT UNITS FORM */}
               {activeTable === 'content_units' && (
                 <>
                   <div className="grid grid-cols-2 gap-3">
@@ -1297,15 +1697,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                     />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-300 block mb-1">Transliterasi Latin</label>
-                    <input
-                      type="text"
-                      value={formData.latin_text || ''}
-                      onChange={(e) => setFormData({ ...formData, latin_text: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                    />
-                  </div>
-                  <div>
                     <label className="font-bold text-slate-300 block mb-1">Arti / Terjemahan Bahasa Indonesia</label>
                     <textarea
                       rows={2}
@@ -1317,62 +1708,42 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                 </>
               )}
 
-              {/* 5. ACADEMIC LEVELS FORM */}
               {activeTable === 'academic_levels' && (
                 <>
                   <div>
                     <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Tingkat Kelas SD *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.grade_level || 1}
-                        onChange={(e) => setFormData({ ...formData, grade_level: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        {[1, 2, 3, 4, 5, 6].map(g => (
-                          <option key={g} value={g}>Kelas {g} SD</option>
-                        ))}
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, grade_level: Number(val) })}
+                        options={[1, 2, 3, 4, 5, 6].map(g => ({
+                          value: g,
+                          label: `Kelas ${g} SDIT`
+                        }))}
+                      />
                     </div>
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Tahun Akademik *</label>
                       <input
                         type="text"
                         required
-                        placeholder="2025/2026"
                         value={formData.academic_year || '2025/2026'}
                         onChange={(e) => setFormData({ ...formData, academic_year: e.target.value })}
                         className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
                       />
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 pt-2">
-                    <input
-                      type="checkbox"
-                      id="is_active_level"
-                      checked={formData.is_active ?? true}
-                      onChange={(e) => setFormData({ ...formData, is_active: e.target.checked })}
-                      className="w-4 h-4 rounded text-emerald-600"
-                    />
-                    <label htmlFor="is_active_level" className="font-bold text-slate-300">Tingkat Kelas Aktif Saat Ini</label>
-                  </div>
                 </>
               )}
 
-              {/* 6. EXAM CYCLES FORM */}
               {activeTable === 'exam_cycles' && (
                 <>
                   <div>
@@ -1380,7 +1751,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                     <input
                       type="text"
                       required
-                      placeholder="Contoh: Ujian Tengah Semester (PTS) Ganjil"
                       value={formData.exam_title || ''}
                       onChange={(e) => setFormData({ ...formData, exam_title: e.target.value })}
                       className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-emerald-500 focus:outline-none"
@@ -1388,60 +1758,39 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                   </div>
                   <div>
                     <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Tipe Ujian *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.exam_type || 'PTS_1'}
-                        onChange={(e) => setFormData({ ...formData, exam_type: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="PTS_1">PTS 1 (Penilaian Tengah Semester 1)</option>
-                        <option value="MID_1">MID 1</option>
-                        <option value="PAS_1">PAS 1 (Penilaian Akhir Semester 1)</option>
-                        <option value="PTS_2">PTS 2 (Penilaian Tengah Semester 2)</option>
-                        <option value="MID_2">MID 2</option>
-                        <option value="PAS_2">PAS 2 (Penilaian Akhir Semester 2)</option>
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, exam_type: val })}
+                        options={[
+                          { value: 'PTS_1', label: 'PTS 1 (Tengah Semester Ganjil)' },
+                          { value: 'PAS_1', label: 'PAS 1 (Akhir Semester Ganjil)' },
+                          { value: 'PTS_2', label: 'PTS 2 (Tengah Semester Genap)' },
+                          { value: 'PAS_2', label: 'PAT / UKK (Kenaikan Kelas)' }
+                        ]}
+                      />
                     </div>
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Target Retensi (%)</label>
+                      <label className="font-bold text-slate-300 block mb-1">Tanggal Ujian</label>
                       <input
-                        type="number"
-                        step="0.05"
-                        min="0.5"
-                        max="1.0"
-                        value={formData.target_retention || 0.90}
-                        onChange={(e) => setFormData({ ...formData, target_retention: Number(e.target.value) })}
+                        type="date"
+                        value={formData.exam_date || ''}
+                        onChange={(e) => setFormData({ ...formData, exam_date: e.target.value })}
                         className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
                       />
                     </div>
                   </div>
-                  <div>
-                    <label className="font-bold text-slate-300 block mb-1">Tanggal Pelaksanaan Ujian</label>
-                    <input
-                      type="date"
-                      value={formData.exam_date || ''}
-                      onChange={(e) => setFormData({ ...formData, exam_date: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                    />
-                  </div>
                 </>
               )}
 
-              {/* 7. IBADAH DAILY LOGS FORM */}
               {activeTable === 'ibadah_daily_logs' && (
                 <>
                   <div className="grid grid-cols-2 gap-3">
@@ -1456,232 +1805,88 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                       />
                     </div>
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                      <select
+                      <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa *</label>
+                      <ElegantSelect
                         value={formData.student_id || ''}
-                        onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                      >
-                        {userProfiles.map(u => (
-                          <option key={u.id} value={u.id}>
-                            {u.full_name} ({u.email || u.id})
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, student_id: val })}
+                        options={studentOptions}
+                      />
                     </div>
                   </div>
-
-                  <div>
-                    <label className="font-bold text-slate-300 block mb-1">Status Sholat 5 Waktu</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {(['sholat_subuh', 'sholat_dzuhur', 'sholat_ashar', 'sholat_maghrib', 'sholat_isya'] as const).map(waktu => (
-                        <div key={waktu}>
-                          <label className="text-[10px] font-bold text-slate-400 capitalize block mb-0.5">
-                            {waktu.replace('sholat_', '')}
-                          </label>
-                          <select
-                            value={formData[waktu] || 'BERJAMAAH'}
-                            onChange={(e) => setFormData({ ...formData, [waktu]: e.target.value })}
-                            className="w-full p-2 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono text-[11px]"
-                          >
-                            <option value="BERJAMAAH">Berjamaah</option>
-                            <option value="MUNFARID_TEPAT">Munfarid Tepat</option>
-                            <option value="TERLAMBAT">Terlambat</option>
-                            <option value="TIDAK_SHOLAT">Tidak Sholat</option>
-                            <option value="UZUR">Uzur Syar'i</option>
-                          </select>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Ibadah Puasa</label>
-                      <select
+                      <ElegantSelect
                         value={formData.puasa_type || 'TIDAK_PUASA'}
-                        onChange={(e) => setFormData({ ...formData, puasa_type: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="TIDAK_PUASA">Tidak Puasa</option>
-                        <option value="SENIN_KAMIS">Puasa Senin-Kamis</option>
-                        <option value="AYYAMUL_BIDH">Puasa Ayyamul Bidh</option>
-                        <option value="RAMADHAN">Puasa Ramadhan</option>
-                        <option value="SUNNAH_LAINNYA">Sunnah Lainnya</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Status Paraf Orang Tua</label>
-                      <select
-                        value={formData.parent_review_status || 'PENDING'}
-                        onChange={(e) => setFormData({ ...formData, parent_review_status: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="PENDING">Menunggu Paraf (PENDING)</option>
-                        <option value="APPROVED">Disetujui / Diparaf (APPROVED)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Bintang Pahala Diberikan</label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={formData.reward_stars_awarded || 0}
-                        onChange={(e) => setFormData({ ...formData, reward_stars_awarded: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                        onChange={(val) => setFormData({ ...formData, puasa_type: val })}
+                        options={[
+                          { value: 'TIDAK_PUASA', label: 'Tidak Puasa' },
+                          { value: 'SENIN_KAMIS', label: '🌙 Puasa Senin-Kamis' },
+                          { value: 'AYYAMUL_BIDH', label: '🌕 Puasa Ayyamul Bidh' },
+                          { value: 'RAMADHAN', label: '✨ Puasa Ramadhan' }
+                        ]}
                       />
                     </div>
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Catatan Anak</label>
-                      <input
-                        type="text"
-                        placeholder="Alhamdulillah tertib sholat"
-                        value={formData.child_notes || ''}
-                        onChange={(e) => setFormData({ ...formData, child_notes: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                      <label className="font-bold text-slate-300 block mb-1">Status Paraf Orang Tua</label>
+                      <ElegantSelect
+                        value={formData.parent_review_status || 'PENDING'}
+                        onChange={(val) => setFormData({ ...formData, parent_review_status: val })}
+                        options={[
+                          { value: 'PENDING', label: '⏳ Menunggu Paraf' },
+                          { value: 'APPROVED', label: '✅ Telah Diparaf Resmi' }
+                        ]}
                       />
                     </div>
                   </div>
                 </>
               )}
 
-              {/* 8. SHOLAT LEARNING PROGRESS FORM */}
               {activeTable === 'sholat_learning_progress' && (
                 <>
                   <div>
-                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa *</label>
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Kode Rukun Sholat *</label>
-                      <select
-                        value={formData.step_code || 'RUKUN_01_NIAT'}
-                        onChange={(e) => setFormData({ ...formData, step_code: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="RUKUN_01_NIAT">1. Niat & Berdiri Tegak</option>
-                        <option value="RUKUN_02_TAKBIRATUL_IHRAM">2. Takbiratul Ihram</option>
-                        <option value="RUKUN_03_SEDEKAP_IFTITAH">3. Sedekap & Doa Iftitah</option>
-                        <option value="RUKUN_04_AL_FATIHAH">4. Membaca Al-Fatihah</option>
-                        <option value="RUKUN_05_RUKU">5. Ruku' & Thuma'ninah</option>
-                        <option value="RUKUN_06_ITIDAL">6. I'tidal & Doa</option>
-                        <option value="RUKUN_07_SUJUD">7. Sujud 7 Anggota Tubuh</option>
-                        <option value="RUKUN_08_DUDUK_ANTARA_SUJUD">8. Duduk Antara Dua Sujud</option>
-                        <option value="RUKUN_09_TASYAHHUD_AWAL">9. Tasyahhud Awal</option>
-                        <option value="RUKUN_10_TASYAHHUD_AKHIR">10. Tasyahhud Akhir</option>
-                        <option value="RUKUN_11_SHOLAWAT_NABI">11. Sholawat Atas Nabi</option>
-                        <option value="RUKUN_12_SALAM">12. Salam ke Kanan & Kiri</option>
-                        <option value="RUKUN_13_TERTIB">13. Tertib Seluruh Rukun</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Urutan Langkah</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={13}
-                        value={formData.step_order || 1}
-                        onChange={(e) => setFormData({ ...formData, step_order: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Jumlah Kali Latihan</label>
-                      <input
-                        type="number"
-                        min={0}
-                        value={formData.animation_practiced_count || 0}
-                        onChange={(e) => setFormData({ ...formData, animation_practiced_count: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Skor Kuis Sholat (0-100)</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={formData.quiz_high_score || 0}
-                        onChange={(e) => setFormData({ ...formData, quiz_high_score: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3 pt-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="reading_memorized"
-                        checked={formData.reading_memorized || false}
-                        onChange={(e) => setFormData({ ...formData, reading_memorized: e.target.checked })}
-                        className="w-4 h-4 rounded text-emerald-600"
-                      />
-                      <label htmlFor="reading_memorized" className="font-bold text-slate-300">Bacaan Sudah Dihafal</label>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        id="parent_verified_movement"
-                        checked={formData.parent_verified_movement || false}
-                        onChange={(e) => setFormData({ ...formData, parent_verified_movement: e.target.checked, parent_verified_reading: e.target.checked })}
-                        className="w-4 h-4 rounded text-emerald-600"
-                      />
-                      <label htmlFor="parent_verified_movement" className="font-bold text-slate-300">Verifikasi Sah dari Orang Tua</label>
-                    </div>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
                   <div>
-                    <label className="font-bold text-slate-300 block mb-1">Catatan Orang Tua</label>
-                    <input
-                      type="text"
-                      placeholder="Gerakan tegak lurus sempurna"
-                      value={formData.parent_notes || ''}
-                      onChange={(e) => setFormData({ ...formData, parent_notes: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                    <label className="font-bold text-slate-300 block mb-1">Langkah Rukun Sholat *</label>
+                    <ElegantSelect
+                      value={formData.step_code || 'RUKUN_01_NIAT'}
+                      onChange={(val) => setFormData({ ...formData, step_code: val })}
+                      options={[
+                        { value: 'RUKUN_01_NIAT', label: '1. Niat & Berdiri Tegak' },
+                        { value: 'RUKUN_02_TAKBIRATUL_IHRAM', label: '2. Takbiratul Ihram' },
+                        { value: 'RUKUN_03_SEDEKAP_IFTITAH', label: '3. Sedekap & Doa Iftitah' },
+                        { value: 'RUKUN_04_AL_FATIHAH', label: '4. Membaca Al-Fatihah' },
+                        { value: 'RUKUN_05_RUKU', label: '5. Ruku\' & Thuma\'ninah' },
+                        { value: 'RUKUN_06_ITIDAL', label: '6. I\'tidal & Doa' },
+                        { value: 'RUKUN_07_SUJUD_PERTAMA', label: '7. Sujud 7 Anggota Tubuh' }
+                      ]}
                     />
                   </div>
                 </>
               )}
 
-              {/* 9. FSRS MEMORY STATES FORM */}
               {activeTable === 'fsrs_memory_states' && (
                 <>
                   <div>
-                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa *</label>
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Unit / Materi ID *</label>
+                      <label className="font-bold text-slate-300 block mb-1">Unit ID *</label>
                       <input
                         type="text"
                         required
-                        placeholder="unit-an-naba-01"
                         value={formData.unit_id || ''}
                         onChange={(e) => setFormData({ ...formData, unit_id: e.target.value })}
                         className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
@@ -1689,138 +1894,51 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
                     </div>
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Track Memori *</label>
-                      <select
+                      <ElegantSelect
                         value={formData.track_type || 'SABAQ'}
-                        onChange={(e) => setFormData({ ...formData, track_type: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="SABAQ">SABAQ (Hafalan Baru)</option>
-                        <option value="SABQI">SABQI (Muroja'ah Dekat)</option>
-                        <option value="MANZIL">MANZIL (Muroja'ah Jauh)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Stabilitas (Hari)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={formData.stability || 2.5}
-                        onChange={(e) => setFormData({ ...formData, stability: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
+                        onChange={(val) => setFormData({ ...formData, track_type: val })}
+                        options={[
+                          { value: 'SABAQ', label: 'SABAQ (Hafalan Baru)' },
+                          { value: 'SABQI', label: 'SABQI (Muroja\'ah Dekat)' },
+                          { value: 'MANZIL', label: 'MANZIL (Mutqin / Terjaga)' }
+                        ]}
                       />
                     </div>
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Kesulitan (1-10)</label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="1"
-                        max="10"
-                        value={formData.difficulty || 4.0}
-                        onChange={(e) => setFormData({ ...formData, difficulty: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Retensi (0-1.0)</label>
-                      <input
-                        type="number"
-                        step="0.05"
-                        min="0"
-                        max="1"
-                        value={formData.retrievability || 0.95}
-                        onChange={(e) => setFormData({ ...formData, retrievability: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="font-bold text-slate-300 block mb-1">Jadwal Muroja'ah Ulang (Next Due)</label>
-                    <input
-                      type="date"
-                      value={formData.next_due ? formData.next_due.slice(0, 10) : ''}
-                      onChange={(e) => setFormData({ ...formData, next_due: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-mono"
-                    />
                   </div>
                 </>
               )}
 
-              {/* 10. MUTABAAH LOGS FORM */}
               {activeTable === 'mutabaah_logs' && (
                 <>
                   <div>
-                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa (Linked Email) *</label>
-                    <select
+                    <label className="font-bold text-slate-300 block mb-1">Hubungkan ke Siswa *</label>
+                    <ElegantSelect
                       value={formData.student_id || ''}
-                      onChange={(e) => setFormData({ ...formData, student_id: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-emerald-300 font-mono font-bold"
-                    >
-                      {userProfiles.map(u => (
-                        <option key={u.id} value={u.id}>
-                          {u.full_name} ({u.email || u.id})
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setFormData({ ...formData, student_id: val })}
+                      options={studentOptions}
+                    />
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="font-bold text-slate-300 block mb-1">Penginput *</label>
-                      <select
-                        value={formData.logged_by_role || 'PARENT'}
-                        onChange={(e) => setFormData({ ...formData, logged_by_role: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="PARENT">Orang Tua (PARENT)</option>
-                        <option value="STUDENT">Siswa Sendiri (STUDENT)</option>
-                      </select>
-                    </div>
+                  <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold text-slate-300 block mb-1">Nilai Mutaba'ah</label>
-                      <select
+                      <ElegantSelect
                         value={formData.official_mutabaah_status || 'L'}
-                        onChange={(e) => setFormData({ ...formData, official_mutabaah_status: e.target.value })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value="L">Lancar (L)</option>
-                        <option value="BL">Belum Lancar (BL)</option>
-                      </select>
+                        onChange={(val) => setFormData({ ...formData, official_mutabaah_status: val })}
+                        options={[
+                          { value: 'L', label: '🌟 Lancar (L)' },
+                          { value: 'BL', label: '🔄 Belum Lancar (BL)' }
+                        ]}
+                      />
                     </div>
                     <div>
-                      <label className="font-bold text-slate-300 block mb-1">Rating FSRS</label>
-                      <select
-                        value={formData.fsrs_rating || 3}
-                        onChange={(e) => setFormData({ ...formData, fsrs_rating: Number(e.target.value) })}
-                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold"
-                      >
-                        <option value={1}>1 - Ulangi (Again)</option>
-                        <option value={2}>2 - Sulit (Hard)</option>
-                        <option value={3}>3 - Bagus (Good)</option>
-                        <option value={4}>4 - Mudah (Easy)</option>
-                      </select>
+                      <label className="font-bold text-slate-300 block mb-1">Catatan Tajwid & Makhraj</label>
+                      <input
+                        type="text"
+                        value={formData.tajwid_makhraj_notes || ''}
+                        onChange={(e) => setFormData({ ...formData, tajwid_makhraj_notes: e.target.value })}
+                        className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
+                      />
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 pt-2">
-                    <input
-                      type="checkbox"
-                      id="parent_verified_log"
-                      checked={formData.parent_verified ?? true}
-                      onChange={(e) => setFormData({ ...formData, parent_verified: e.target.checked })}
-                      className="w-4 h-4 rounded text-emerald-600"
-                    />
-                    <label htmlFor="parent_verified_log" className="font-bold text-slate-300">Telah Diverifikasi Valid oleh Orang Tua / Ustadz</label>
-                  </div>
-                  <div>
-                    <label className="font-bold text-slate-300 block mb-1">Catatan Tajwid & Makhraj</label>
-                    <input
-                      type="text"
-                      placeholder="Ghunnah dan mad thobi'i sudah mutqin"
-                      value={formData.tajwid_makhraj_notes || ''}
-                      onChange={(e) => setFormData({ ...formData, tajwid_makhraj_notes: e.target.value })}
-                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white"
-                    />
                   </div>
                 </>
               )}

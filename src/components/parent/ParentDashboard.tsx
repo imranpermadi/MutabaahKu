@@ -10,6 +10,7 @@ import {
   Award,
   Check,
   ChevronRight,
+  ChevronDown,
   Volume2,
   Mic,
   Plus,
@@ -33,7 +34,11 @@ import {
   FileText,
   Lock,
   Eye,
-  CalendarDays
+  CalendarDays,
+  BookOpen,
+  Edit3,
+  RotateCcw,
+  Layers
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import jsPDF from 'jspdf';
@@ -45,8 +50,108 @@ import {
   UserGender,
   SholatStatus,
   PuasaType,
-  PuasaCompletion
+  PuasaCompletion,
+  CurriculumCategory,
+  ExamType
 } from '../../types/database';
+import {
+  db,
+  addCustomCurriculumItem,
+  deleteCurriculumItem,
+  SDIT_CURRICULUM_CATALOG,
+  CurriculumCatalogTemplate
+} from '../../lib/db';
+
+// Komponen Custom Dropdown Elegan untuk Portal Orang Tua (Bebas dari <select> bawaan browser yang kaku)
+interface ParentDropdownOption {
+  value: string | number;
+  label: string;
+  desc?: string;
+  badge?: string;
+}
+
+function ParentElegantDropdown({
+  value,
+  options,
+  onChange,
+  label
+}: {
+  value: string | number;
+  options: ParentDropdownOption[];
+  onChange: (val: any) => void;
+  label?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find(o => String(o.value) === String(value)) || options[0];
+
+  return (
+    <div className="relative">
+      {label && (
+        <label className="block text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1">
+          {label}
+        </label>
+      )}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full text-left px-3 py-2 rounded-xl bg-white border-2 border-slate-200 hover:border-emerald-400 focus:outline-none focus:border-emerald-500 transition-all flex items-center justify-between gap-2 shadow-2xs"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-extrabold text-slate-800 truncate">
+            {selected?.label}
+          </div>
+          {selected?.desc && (
+            <div className="text-[10px] text-slate-500 truncate">
+              {selected.desc}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {selected?.badge && (
+            <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+              {selected.badge}
+            </span>
+          )}
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${open ? 'rotate-180 text-emerald-600' : ''}`} />
+        </div>
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 right-0 mt-1.5 z-50 bg-white border-2 border-emerald-400 rounded-2xl shadow-xl max-h-60 overflow-y-auto p-1 space-y-0.5 animate-fadeIn">
+            {options.map(opt => {
+              const isSelected = String(opt.value) === String(value);
+              return (
+                <button
+                  key={String(opt.value)}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-xl flex items-center justify-between gap-2 transition-all ${
+                    isSelected
+                      ? 'bg-emerald-50 text-emerald-950 border border-emerald-300 font-black'
+                      : 'text-slate-700 hover:bg-slate-50 font-bold'
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs truncate">{opt.label}</div>
+                    {opt.desc && (
+                      <div className="text-[10px] text-slate-500 font-medium truncate">{opt.desc}</div>
+                    )}
+                  </div>
+                  {isSelected && <Check className="w-4 h-4 text-emerald-600 flex-shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 // Format Tanggal Bahasa Indonesia Bebas Masalah UTC Timezone
 function formatIndonesianDate(dateStr: string): { fullDate: string; dayName: string; isToday: boolean; isYesterday: boolean } {
@@ -105,6 +210,7 @@ interface ParentDashboardProps {
   }) => Promise<void>;
   onDeleteChild?: (childId: string) => Promise<void>;
   pendingChecklists: MurojaahChecklist[];
+  allChecklists?: MurojaahChecklist[];
   pendingIbadahLog?: IbadahDailyLog;
   allIbadahLogs?: IbadahDailyLog[];
   onApproveChecklist: (checklistId: string, grade: 'L' | 'BL', notes: string) => void;
@@ -120,6 +226,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   onAddChild,
   onDeleteChild,
   pendingChecklists,
+  allChecklists = [],
   pendingIbadahLog,
   allIbadahLogs = [],
   onApproveChecklist,
@@ -129,6 +236,24 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [showAddChildModal, setShowAddChildModal] = useState(false);
   const [childToDelete, setChildToDelete] = useState<UserProfile | null>(null);
   const [isDeletingChild, setIsDeletingChild] = useState(false);
+
+  // Mode Tampilan Hafalan & Materi (Section 2): 'QUEUE' (Antrean Paraf) vs 'CURRICULUM' (Kelola Materi & Kurikulum)
+  const [hafalanViewMode, setHafalanViewMode] = useState<'QUEUE' | 'CURRICULUM'>('QUEUE');
+  const [currFilterCategory, setCurrFilterCategory] = useState<'ALL' | CurriculumCategory>('ALL');
+  const [currFilterCycle, setCurrFilterCycle] = useState<'ALL' | ExamType>('ALL');
+  const [showMaterialModal, setShowMaterialModal] = useState(false);
+  const [showCatalogModal, setShowCatalogModal] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState<MurojaahChecklist | null>(null);
+
+  // Form State Tambah / Edit Materi Hafalan oleh Orang Tua
+  const [matTitle, setMatTitle] = useState('');
+  const [matCategory, setMatCategory] = useState<CurriculumCategory>('QURAN');
+  const [matCycle, setMatCycle] = useState<ExamType>('PTS_1');
+  const [matTargetPass, setMatTargetPass] = useState<number>(5);
+  const [matArabic, setMatArabic] = useState('');
+  const [matLatin, setMatLatin] = useState('');
+  const [matTranslation, setMatTranslation] = useState('');
+  const [matSource, setMatSource] = useState('Al-Qur\'an Juz 30');
 
   // State Evaluasi & Hadiah Bintang Mutaba'ah Yaumiyah
   const [selectedRewardStars, setSelectedRewardStars] = useState<number>(25);
@@ -171,6 +296,93 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const childChecklists = currentChild
     ? pendingChecklists.filter(c => Boolean(c && c.student_id === currentChild.id))
     : [];
+
+  const allChildMaterials = currentChild
+    ? (allChecklists.length > 0 ? allChecklists : pendingChecklists).filter(c => Boolean(c && c.student_id === currentChild.id))
+    : [];
+
+  const openCreateMaterialModal = () => {
+    setEditingMaterial(null);
+    setMatTitle('');
+    setMatCategory('QURAN');
+    setMatCycle('PTS_1');
+    setMatTargetPass(5);
+    setMatArabic('');
+    setMatLatin('');
+    setMatTranslation('');
+    setMatSource('Al-Qur\'an Juz 30');
+    setShowMaterialModal(true);
+  };
+
+  const openEditMaterialModal = (item: MurojaahChecklist) => {
+    setEditingMaterial(item);
+    setMatTitle(item.curriculum_title);
+    setMatCategory(item.category);
+    setMatCycle((item.exam_cycle_id as ExamType) || 'PTS_1');
+    setMatTargetPass(item.target_pass_count || 5);
+    setMatArabic(item.arabic_text || '');
+    setMatLatin(item.latin_text || '');
+    setMatTranslation(item.translation || '');
+    setMatSource(item.source || 'Al-Qur\'an Juz 30');
+    setShowMaterialModal(true);
+  };
+
+  const handleSaveMaterialSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentChild || !matTitle.trim()) return;
+
+    await addCustomCurriculumItem({
+      id: editingMaterial?.id,
+      student_id: currentChild.id,
+      curriculum_item_id: editingMaterial?.curriculum_item_id || `curr-${currentChild.id}-${Date.now()}`,
+      curriculum_title: matTitle.trim(),
+      category: matCategory,
+      grade_level: currentChild.current_grade || 1,
+      exam_cycle_id: matCycle,
+      target_pass_count: matTargetPass,
+      completed_pass_count: editingMaterial?.completed_pass_count || 0,
+      child_self_claim: editingMaterial?.child_self_claim || false,
+      parent_review_status: editingMaterial?.parent_review_status || 'PENDING',
+      mutabaah_grade: editingMaterial?.mutabaah_grade || 'BL',
+      arabic_text: matArabic.trim(),
+      latin_text: matLatin.trim(),
+      translation: matTranslation.trim(),
+      source: matSource.trim()
+    });
+
+    confetti({ particleCount: 55, spread: 65, origin: { y: 0.6 } });
+    setShowMaterialModal(false);
+    setEditingMaterial(null);
+  };
+
+  const handleAddFromCatalog = async (tpl: CurriculumCatalogTemplate) => {
+    if (!currentChild) return;
+    await addCustomCurriculumItem({
+      student_id: currentChild.id,
+      curriculum_item_id: `curr-${currentChild.id}-${tpl.code}`,
+      curriculum_title: tpl.title,
+      category: tpl.category,
+      grade_level: currentChild.current_grade || tpl.recommended_grade,
+      exam_cycle_id: tpl.exam_cycle_id,
+      target_pass_count: tpl.target_pass_count,
+      completed_pass_count: 0,
+      child_self_claim: false,
+      parent_review_status: 'PENDING',
+      mutabaah_grade: 'BL',
+      arabic_text: tpl.arabic_text,
+      latin_text: tpl.latin_text,
+      translation: tpl.translation,
+      source: tpl.source
+    });
+    confetti({ particleCount: 40, spread: 60, origin: { y: 0.6 } });
+  };
+
+  const handleReassignMaterial = async (item: MurojaahChecklist) => {
+    await db.murojaah_checklists.update(item.id, {
+      parent_review_status: 'PENDING',
+      last_checked_at: new Date().toISOString()
+    });
+  };
 
   const handleApproveChecklist = (id: string, grade: 'L' | 'BL') => {
     confetti({
@@ -515,142 +727,413 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
         </div>
       </div>
 
-      {/* SECTION 2: 1-Click Digital Paraf Queue dengan Rekaman Suara Setoran Anak */}
-      <div className="bg-white rounded-3xl sm:rounded-4xl border-2 border-emerald-500/20 shadow-md p-5 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center text-amber-800">
-              <Mic className="w-4 h-4 text-amber-700" />
+      {/* SECTION 2: Antrean Paraf Setoran & Kelola Materi Kurikulum Anak */}
+      <div className="bg-white rounded-3xl sm:rounded-4xl border-2 border-emerald-500/20 shadow-md p-5 sm:p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-800 border border-amber-200 flex-shrink-0">
+              {hafalanViewMode === 'QUEUE' ? (
+                <Mic className="w-5 h-5 text-amber-700" />
+              ) : (
+                <BookOpen className="w-5 h-5 text-emerald-700" />
+              )}
             </div>
             <div>
-              <h3 className="text-base sm:text-lg font-black text-slate-800">
-                Antrean Paraf & Review Setoran Hafalan
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                  Tahfidz & Muroja'ah
+                </span>
+                <span className="text-xs font-bold text-slate-500">
+                  &bull; Santri: <strong className="text-emerald-700">{currentChild.full_name}</strong>
+                </span>
+              </div>
+              <h3 className="text-base sm:text-xl font-black text-slate-800 mt-0.5">
+                {hafalanViewMode === 'QUEUE'
+                  ? 'Antrean Paraf & Review Setoran Hafalan'
+                  : 'Kelola Materi & Kurikulum Hafalan Anak'}
               </h3>
-              <p className="text-xs text-slate-500">
-                Santri: <strong className="text-emerald-700">{currentChild.full_name}</strong> &bull; Periksa rekaman suara hafalan
-              </p>
             </div>
           </div>
-          <span className="text-xs font-bold bg-amber-100 text-amber-800 px-3 py-1 rounded-full">
-            {childChecklists.length} Menunggu Persetujuan
-          </span>
+
+          {/* Tab Switcher: Antrean Paraf vs Kelola Materi & Kurikulum */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setHafalanViewMode('QUEUE')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${
+                hafalanViewMode === 'QUEUE'
+                  ? 'bg-white text-emerald-800 shadow-sm border border-emerald-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Mic className="w-3.5 h-3.5 text-amber-600" />
+              <span>Antrean Paraf Setoran</span>
+              {childChecklists.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-white font-black">
+                  {childChecklists.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setHafalanViewMode('CURRICULUM')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black transition-all ${
+                hafalanViewMode === 'CURRICULUM'
+                  ? 'bg-white text-emerald-800 shadow-sm border border-emerald-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Kelola Materi & Kurikulum</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-100 text-emerald-800 font-extrabold">
+                {allChildMaterials.length}
+              </span>
+            </button>
+          </div>
         </div>
 
-        <div className="space-y-4 mt-4">
-          {childChecklists.length === 0 ? (
-            <div className="p-8 text-center bg-slate-50 rounded-3xl border border-dashed border-slate-200 text-slate-500 text-sm">
-              🎉 MasyaAllah! Semua setoran hafalan <strong className="text-emerald-700">{currentChild.full_name}</strong> telah selesai diperiksa dan diparaf.
-            </div>
-          ) : (
-            childChecklists.map((item) => (
-              <div
-                key={item.id}
-                className="p-4 sm:p-5 rounded-3xl border-2 border-amber-200/90 bg-gradient-to-br from-white to-amber-50/30 shadow-sm space-y-3"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex-1 min-w-[240px]">
-                    <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-                        {item.category}
-                      </span>
-                      <span className="text-xs font-bold text-slate-500">
-                        Progres: {item.completed_pass_count} dari {item.target_pass_count}x Muroja'ah
-                      </span>
-                      {item.audio_record_url && (
-                        <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-200 text-amber-950 flex items-center gap-1">
-                          <Mic className="w-3 h-3 text-amber-800" />
-                          <span>Ada Rekaman Suara</span>
+        {/* TAB 1: ANTREAN PARAF SETORAN HAFALAN */}
+        {hafalanViewMode === 'QUEUE' && (
+          <div className="space-y-4">
+            {childChecklists.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 rounded-3xl border border-dashed border-slate-200 space-y-3">
+                <p className="text-slate-600 text-sm font-bold">
+                  🎉 MasyaAllah! Semua setoran hafalan <strong className="text-emerald-700">{currentChild.full_name}</strong> telah selesai diperiksa dan diparaf.
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setHafalanViewMode('CURRICULUM')}
+                    className="btn-chunky py-2 px-4 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl inline-flex items-center gap-1.5"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Kelola / Tambah Materi Hafalan Anak</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              childChecklists.map((item) => (
+                <div
+                  key={item.id}
+                  className="p-4 sm:p-5 rounded-3xl border-2 border-amber-200/90 bg-gradient-to-br from-white to-amber-50/30 shadow-sm space-y-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex-1 min-w-[240px]">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
+                          {item.category}
                         </span>
+                        {item.exam_cycle_id && (
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                            {item.exam_cycle_id.replace('_', ' ')}
+                          </span>
+                        )}
+                        <span className="text-xs font-bold text-slate-500">
+                          Progres: {item.completed_pass_count} dari {item.target_pass_count}x Muroja'ah
+                        </span>
+                        {item.audio_record_url && (
+                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-200 text-amber-950 flex items-center gap-1">
+                            <Mic className="w-3 h-3 text-amber-800" />
+                            <span>Ada Rekaman Suara</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <h4 className="text-base sm:text-lg font-black text-slate-800">
+                        {item.curriculum_title}
+                      </h4>
+
+                      {item.arabic_text && (
+                        <p className="text-xs font-arabic text-emerald-900 mt-1 font-semibold truncate max-w-lg">
+                          {item.arabic_text}
+                        </p>
                       )}
                     </div>
 
-                    <h4 className="text-base sm:text-lg font-black text-slate-800">
-                      {item.curriculum_title}
-                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => openEditMaterialModal(item)}
+                      className="text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-white border border-slate-200 hover:border-emerald-300 text-slate-600 hover:text-emerald-800 flex items-center gap-1 transition-all"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>Edit Materi</span>
+                    </button>
+                  </div>
 
-                    {item.arabic_text && (
-                      <p className="text-xs font-arabic text-emerald-900 mt-1 font-semibold truncate max-w-lg">
-                        {item.arabic_text}
-                      </p>
-                    )}
+                  {/* AUDIO REKAMAN SUARA SETORAN (HAFALAN REVIEW WIDGET) */}
+                  {item.audio_record_url ? (
+                    <div className="p-3.5 bg-amber-100/70 rounded-2xl border border-amber-300 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-black text-amber-950">
+                        <div className="flex items-center gap-1.5">
+                          <Volume2 className="w-4 h-4 text-amber-700" />
+                          <span>🎙️ Rekaman Suara Setoran {currentChild.full_name.split(' ')[0]}:</span>
+                        </div>
+                        <span className="text-[10px] font-bold bg-amber-200/80 px-2 py-0.5 rounded-full text-amber-900">
+                          {item.audio_duration ? `${item.audio_duration} detik` : 'Audio Baru'} &bull; {item.recorded_at ? new Date(item.recorded_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'Hari Ini'}
+                        </span>
+                      </div>
+
+                      {/* Standard Audio Player */}
+                      <audio controls src={item.audio_record_url} className="w-full h-9 rounded-xl" />
+
+                      {/* Quick Tajwid / Makhraj Feedback Chips */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="text-[10px] font-bold text-amber-900">Koreksi Cepat:</span>
+                        {[
+                          'Makhraj & Tajwid Bagus',
+                          'Perbaiki Ghunnah (Dengung)',
+                          'Hati-hati Panjang Pendek (Mad)',
+                          'Tingkatkan Kelancaran'
+                        ].map((chip) => (
+                          <button
+                            key={chip}
+                            type="button"
+                            onClick={() => setNotesInput({ ...notesInput, [item.id]: chip })}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 transition-all active:scale-95"
+                          >
+                            + {chip}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-[11px] text-slate-500 flex items-center gap-2">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Santri belum melampirkan rekaman suara. Anda dapat memparaf langsung dari hafalan tatap muka di rumah.</span>
+                    </div>
+                  )}
+
+                  {/* Input Catatan & Tombol Paraf */}
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <input
+                      type="text"
+                      placeholder="Tuliskan catatan tajwid/makhraj untuk anak..."
+                      value={notesInput[item.id] || ''}
+                      onChange={(e) => setNotesInput({ ...notesInput, [item.id]: e.target.value })}
+                      className="flex-1 min-w-[200px] text-xs p-2.5 rounded-xl border border-amber-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+
+                    {/* 1-Click Paraf Buttons: Lancar (L) vs Belum Lancar (BL) */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleApproveChecklist(item.id, 'L')}
+                        className="btn-chunky py-2 px-4 text-xs bg-emerald-500 hover:bg-emerald-600 text-white border-b-4 border-emerald-700 active:border-b-0 shadow-sm flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Paraf Lancar (L)</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleApproveChecklist(item.id, 'BL')}
+                        className="btn-chunky py-2 px-3.5 text-xs bg-amber-400 hover:bg-amber-500 text-amber-950 border-b-4 border-amber-600 active:border-b-0 shadow-sm flex items-center gap-1.5"
+                      >
+                        <span>Latihan Lagi (BL)</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
+              ))
+            )}
+          </div>
+        )}
 
-                {/* AUDIO REKAMAN SUARA SETORAN (HAFALAN REVIEW WIDGET) */}
-                {item.audio_record_url ? (
-                  <div className="p-3.5 bg-amber-100/70 rounded-2xl border border-amber-300 space-y-2">
-                    <div className="flex items-center justify-between text-xs font-black text-amber-950">
-                      <div className="flex items-center gap-1.5">
-                        <Volume2 className="w-4 h-4 text-amber-700" />
-                        <span>🎙️ Rekaman Suara Setoran {currentChild.full_name.split(' ')[0]}:</span>
-                      </div>
-                      <span className="text-[10px] font-bold bg-amber-200/80 px-2 py-0.5 rounded-full text-amber-900">
-                        {item.audio_duration ? `${item.audio_duration} detik` : 'Audio Baru'} &bull; {item.recorded_at ? new Date(item.recorded_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'Hari Ini'}
-                      </span>
-                    </div>
+        {/* TAB 2: KELOLA MATERI & KURIKULUM HAFALAN ANAK (CRUD LENGKAP + KATALOG SDIT) */}
+        {hafalanViewMode === 'CURRICULUM' && (() => {
+          const filteredMaterials = allChildMaterials.filter(m => {
+            if (currFilterCategory !== 'ALL' && m.category !== currFilterCategory) return false;
+            if (currFilterCycle !== 'ALL' && (m.exam_cycle_id || 'PTS_1') !== currFilterCycle) return false;
+            return true;
+          });
 
-                    {/* Standard Audio Player */}
-                    <audio controls src={item.audio_record_url} className="w-full h-9 rounded-xl" />
-
-                    {/* Quick Tajwid / Makhraj Feedback Chips */}
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      <span className="text-[10px] font-bold text-amber-900">Koreksi Cepat:</span>
-                      {[
-                        'Makhraj & Tajwid Bagus',
-                        'Perbaiki Ghunnah (Dengung)',
-                        'Hati-hati Panjang Pendek (Mad)',
-                        'Tingkatkan Kelancaran'
-                      ].map((chip) => (
-                        <button
-                          key={chip}
-                          type="button"
-                          onClick={() => setNotesInput({ ...notesInput, [item.id]: chip })}
-                          className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 transition-all active:scale-95"
-                        >
-                          + {chip}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-2.5 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-[11px] text-slate-500 flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Santri belum melampirkan rekaman suara. Anda dapat memparaf langsung dari hafalan tatap muka di rumah.</span>
-                  </div>
-                )}
-
-                {/* Input Catatan & Tombol Paraf */}
-                <div className="flex flex-wrap items-center gap-3 pt-1">
-                  <input
-                    type="text"
-                    placeholder="Tuliskan catatan tajwid/makhraj untuk anak..."
-                    value={notesInput[item.id] || ''}
-                    onChange={(e) => setNotesInput({ ...notesInput, [item.id]: e.target.value })}
-                    className="flex-1 min-w-[200px] text-xs p-2.5 rounded-xl border border-amber-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-
-                  {/* 1-Click Paraf Buttons: Lancar (L) vs Belum Lancar (BL) */}
+          return (
+            <div className="space-y-4">
+              {/* Info Banner & Tombol Aksi Tambah Materi */}
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50/70 to-amber-50/50 border border-emerald-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-1 max-w-xl">
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleApproveChecklist(item.id, 'L')}
-                      className="btn-chunky py-2 px-4 text-xs bg-emerald-500 hover:bg-emerald-600 text-white border-b-4 border-emerald-700 active:border-b-0 shadow-sm flex items-center gap-1.5"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Paraf Lancar (L)</span>
-                    </button>
-
-                    <button
-                      onClick={() => handleApproveChecklist(item.id, 'BL')}
-                      className="btn-chunky py-2 px-3.5 text-xs bg-amber-400 hover:bg-amber-500 text-amber-950 border-b-4 border-amber-600 active:border-b-0 shadow-sm flex items-center gap-1.5"
-                    >
-                      <span>Latihan Lagi (BL)</span>
-                    </button>
+                    <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-md bg-emerald-600 text-white">
+                      Pusat Kendali Kurikulum Orang Tua
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-900">
+                      Sinkron Otomatis ke Akun Anak & Database
+                    </span>
                   </div>
+                  <p className="text-xs text-slate-600 font-medium">
+                    Kelola kisi-kisi Surat Al-Qur'an, Hadis, dan Doa Harian untuk <strong className="text-slate-800">{currentChild.full_name}</strong>. Setiap materi yang ditambahkan langsung tampil di aplikasi anak dan tersinkron ke tabel <code className="text-[10px] bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-bold text-emerald-800">curriculum_items</code>, <code className="text-[10px] bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-bold text-emerald-800">content_units</code>, &amp; <code className="text-[10px] bg-white px-1.5 py-0.5 rounded border border-emerald-200 font-bold text-emerald-800">fsrs_memory_states</code>.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCatalogModal(true)}
+                    className="btn-chunky py-2.5 px-4 text-xs bg-amber-400 hover:bg-amber-500 text-amber-950 border-b-4 border-amber-600 active:border-b-0 font-black rounded-2xl flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Layers className="w-4 h-4" />
+                    <span>+ Pilih dari Katalog SDIT</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={openCreateMaterialModal}
+                    className="btn-chunky py-2.5 px-4 text-xs bg-emerald-600 hover:bg-emerald-500 text-white border-b-4 border-emerald-800 active:border-b-0 font-black rounded-2xl flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>+ Buat Materi Hafalan Baru</span>
+                  </button>
                 </div>
               </div>
-            ))
-          )}
-        </div>
+
+              {/* Filter Kategori & Siklus Ujian (Menggunakan Custom Dropdown & Pill) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                <ParentElegantDropdown
+                  label="Filter Kategori Materi"
+                  value={currFilterCategory}
+                  onChange={(val) => setCurrFilterCategory(val)}
+                  options={[
+                    { value: 'ALL', label: `📚 Semua Kategori (${allChildMaterials.length} Materi)`, desc: 'Tampilkan Al-Qur\'an, Hadis, dan Doa Harian' },
+                    { value: 'QURAN', label: '📖 Al-Qur\'an (Tahfidz Juz 30/29)', desc: 'Surat-surat pendek & ayat pilihan' },
+                    { value: 'HADITH', label: '📜 Hadis Pilihan Nabi ﷺ', desc: 'Matan hadis adab & akhlak beserta arti' },
+                    { value: 'DOA', label: '🤲 Doa Harian Muslim', desc: 'Doa aktivitas sehari-hari sesuai sunnah' }
+                  ]}
+                />
+
+                <ParentElegantDropdown
+                  label="Filter Siklus Ujian (PTS / PAS)"
+                  value={currFilterCycle}
+                  onChange={(val) => setCurrFilterCycle(val)}
+                  options={[
+                    { value: 'ALL', label: '🗓️ Semua Siklus Ujian', desc: 'Seluruh target semester ganjil & genap' },
+                    { value: 'PTS_1', label: 'PTS 1 — Tengah Semester Ganjil', badge: 'Ganjil' },
+                    { value: 'PAS_1', label: 'PAS 1 — Akhir Semester Ganjil', badge: 'Ganjil' },
+                    { value: 'PTS_2', label: 'PTS 2 — Tengah Semester Genap', badge: 'Genap' },
+                    { value: 'PAS_2', label: 'PAS 2 — Akhir Semester Genap (UKK)', badge: 'Genap' }
+                  ]}
+                />
+              </div>
+
+              {/* Daftar Seluruh Materi Anak */}
+              {filteredMaterials.length === 0 ? (
+                <div className="p-8 text-center rounded-3xl bg-slate-50 border-2 border-dashed border-slate-200 space-y-3">
+                  <p className="text-sm font-black text-slate-700">Belum ada materi pada filter ini.</p>
+                  <p className="text-xs text-slate-500">Klik tombol <strong>"+ Pilih dari Katalog SDIT"</strong> atau <strong>"+ Buat Materi Hafalan Baru"</strong> di atas untuk menambahkan materi hafalan anak.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {filteredMaterials.map((mat) => {
+                    const isApproved = mat.parent_review_status === 'APPROVED';
+                    return (
+                      <div
+                        key={mat.id}
+                        className={`p-4 rounded-2xl border-2 transition-all flex flex-col justify-between gap-3 ${
+                          isApproved
+                            ? 'bg-emerald-50/30 border-emerald-200'
+                            : 'bg-white border-slate-200 hover:border-amber-300'
+                        }`}
+                      >
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                mat.category === 'QURAN'
+                                  ? 'bg-emerald-100 text-emerald-900'
+                                  : mat.category === 'HADITH'
+                                  ? 'bg-amber-100 text-amber-900'
+                                  : 'bg-sky-100 text-sky-900'
+                              }`}>
+                                {mat.category}
+                              </span>
+                              <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                                {(mat.exam_cycle_id || 'PTS_1').replace('_', ' ')}
+                              </span>
+                            </div>
+
+                            <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                              isApproved
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-amber-100 text-amber-900 border border-amber-300'
+                            }`}>
+                              {isApproved ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Mutqin / Lulus ({mat.mutabaah_grade})</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Clock className="w-3 h-3" />
+                                  <span>Aktif Dihafal ({mat.completed_pass_count}/{mat.target_pass_count}x)</span>
+                                </>
+                              )}
+                            </span>
+                          </div>
+
+                          <h4 className="text-sm sm:text-base font-black text-slate-800">
+                            {mat.curriculum_title}
+                          </h4>
+
+                          {mat.arabic_text && (
+                            <p className="text-sm font-arabic text-emerald-950 bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 text-right leading-relaxed">
+                              {mat.arabic_text}
+                            </p>
+                          )}
+
+                          {mat.translation && (
+                            <p className="text-[11px] text-slate-600 italic line-clamp-2">
+                              "{mat.translation}"
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold text-slate-400">
+                            Target: {mat.target_pass_count}x Ulang &bull; {mat.source || 'Kurikulum SDIT'}
+                          </span>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEditMaterialModal(mat)}
+                              className="px-2.5 py-1.5 rounded-xl bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border border-slate-200 text-[11px] font-bold flex items-center gap-1 transition-all"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>Edit</span>
+                            </button>
+
+                            {isApproved && (
+                              <button
+                                type="button"
+                                onClick={() => handleReassignMaterial(mat)}
+                                className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-bold flex items-center gap-1 transition-all"
+                                title="Kembalikan ke daftar tugas muroja'ah anak"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                <span>Tugaskan Lagi</span>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (window.confirm(`Hapus materi "${mat.curriculum_title}" dari daftar hafalan ${currentChild.full_name}?`)) {
+                                  await deleteCurriculumItem(mat.id);
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-bold flex items-center gap-1 transition-all"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Hapus</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* SECTION 3: Evaluasi & Paraf Digital Mutaba'ah Yaumiyah (Approval System & Laporan Lengkap) */}
@@ -1330,60 +1813,52 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 text-xs">
                     {/* Filter Rentang Tanggal */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Rentang Tanggal:</label>
-                      <select
-                        value={filterDateRange}
-                        onChange={(e) => setFilterDateRange(e.target.value as any)}
-                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                      >
-                        <option value="ALL">Semua Tanggal</option>
-                        <option value="7_DAYS">7 Hari Terakhir</option>
-                        <option value="30_DAYS">30 Hari Terakhir</option>
-                      </select>
-                    </div>
+                    <ParentElegantDropdown
+                      label="Rentang Tanggal"
+                      value={filterDateRange}
+                      onChange={(val) => setFilterDateRange(val)}
+                      options={[
+                        { value: 'ALL', label: '🗓️ Semua Tanggal', desc: 'Tampilkan seluruh riwayat' },
+                        { value: '7_DAYS', label: '📅 7 Hari Terakhir', desc: 'Evaluasi pekanan' },
+                        { value: '30_DAYS', label: '📆 30 Hari Terakhir', desc: 'Evaluasi bulanan' }
+                      ]}
+                    />
 
                     {/* Filter Status Paraf */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Status Persetujuan:</label>
-                      <select
-                        value={filterApprovalStatus}
-                        onChange={(e) => setFilterApprovalStatus(e.target.value as any)}
-                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                      >
-                        <option value="ALL">Semua Status</option>
-                        <option value="APPROVED">Telah Diparaf Resmi (Approved)</option>
-                        <option value="PENDING">Menunggu Paraf (Pending)</option>
-                      </select>
-                    </div>
+                    <ParentElegantDropdown
+                      label="Status Persetujuan"
+                      value={filterApprovalStatus}
+                      onChange={(val) => setFilterApprovalStatus(val)}
+                      options={[
+                        { value: 'ALL', label: '✨ Semua Status', desc: 'Pending & Approved' },
+                        { value: 'APPROVED', label: '🔒 Telah Diparaf Resmi', desc: 'Sudah diberi bintang', badge: 'Approved' },
+                        { value: 'PENDING', label: '⏳ Menunggu Paraf', desc: 'Belum diperiksa wali', badge: 'Pending' }
+                      ]}
+                    />
 
                     {/* Filter Disiplin Sholat */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Kualitas Sholat:</label>
-                      <select
-                        value={filterPrayerStatus}
-                        onChange={(e) => setFilterPrayerStatus(e.target.value as any)}
-                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                      >
-                        <option value="ALL">Semua Kualitas Sholat</option>
-                        <option value="PERFECT_5">5 Waktu Berjamaah (100% Masjid)</option>
-                        <option value="HAS_MISSED">Ada Terlambat / Belum Sholat</option>
-                      </select>
-                    </div>
+                    <ParentElegantDropdown
+                      label="Kualitas Sholat"
+                      value={filterPrayerStatus}
+                      onChange={(val) => setFilterPrayerStatus(val)}
+                      options={[
+                        { value: 'ALL', label: '🕌 Semua Kualitas Sholat', desc: 'Seluruh catatan harian' },
+                        { value: 'PERFECT_5', label: '🌟 5 Waktu Berjamaah', desc: '100% tertib di masjid' },
+                        { value: 'HAS_MISSED', label: '⏰ Ada Terlambat / Bolong', desc: 'Perlu bimbingan orang tua' }
+                      ]}
+                    />
 
                     {/* Filter Puasa */}
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Ibadah Shaum:</label>
-                      <select
-                        value={filterFastingStatus}
-                        onChange={(e) => setFilterFastingStatus(e.target.value as any)}
-                        className="w-full text-xs font-bold p-2 rounded-xl bg-white border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                      >
-                        <option value="ALL">Semua Hari</option>
-                        <option value="FASTING">Hari Berpuasa (Sunnah/Wajib)</option>
-                        <option value="NOT_FASTING">Hari Tidak Berpuasa</option>
-                      </select>
-                    </div>
+                    <ParentElegantDropdown
+                      label="Ibadah Shaum"
+                      value={filterFastingStatus}
+                      onChange={(val) => setFilterFastingStatus(val)}
+                      options={[
+                        { value: 'ALL', label: '🌙 Semua Hari', desc: 'Puasa & tidak puasa' },
+                        { value: 'FASTING', label: '🌅 Hari Berpuasa', desc: 'Ramadhan / Sunnah' },
+                        { value: 'NOT_FASTING', label: '🍽️ Hari Tidak Puasa', desc: 'Hari biasa (Ifthar)' }
+                      ]}
+                    />
                   </div>
                 </div>
 
@@ -1731,34 +2206,30 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-extrabold text-slate-700 block mb-1">Jenis Kelamin *</label>
-                  <select
-                    value={newChildGender}
-                    onChange={(e) => setNewChildGender(e.target.value as UserGender)}
-                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 bg-white font-bold"
-                  >
-                    <option value="PUTRA">👦 Putra (Koko & Peci)</option>
-                    <option value="PUTRI">👧 Putri (Mukena Pastel)</option>
-                  </select>
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <ParentElegantDropdown
+                  label="Jenis Kelamin *"
+                  value={newChildGender}
+                  onChange={(val) => setNewChildGender(val as UserGender)}
+                  options={[
+                    { value: 'PUTRA', label: '👦 Putra (Koko & Peci)', desc: 'Avatar santri laki-laki' },
+                    { value: 'PUTRI', label: '👧 Putri (Mukena Pastel)', desc: 'Avatar santri perempuan' }
+                  ]}
+                />
 
-                <div>
-                  <label className="font-extrabold text-slate-700 block mb-1">Tingkat Kelas SD *</label>
-                  <select
-                    value={newChildGrade}
-                    onChange={(e) => setNewChildGrade(Number(e.target.value))}
-                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 bg-white font-bold"
-                  >
-                    <option value={1}>Kelas 1 SD</option>
-                    <option value={2}>Kelas 2 SD</option>
-                    <option value={3}>Kelas 3 SD</option>
-                    <option value={4}>Kelas 4 SD</option>
-                    <option value={5}>Kelas 5 SD</option>
-                    <option value={6}>Kelas 6 SD</option>
-                  </select>
-                </div>
+                <ParentElegantDropdown
+                  label="Tingkat Kelas SD *"
+                  value={newChildGrade}
+                  onChange={(val) => setNewChildGrade(Number(val))}
+                  options={[
+                    { value: 1, label: 'Kelas 1 SD', desc: 'Target Juz 30 Dasar' },
+                    { value: 2, label: 'Kelas 2 SD', desc: 'Target Juz 30 Lanjutan' },
+                    { value: 3, label: 'Kelas 3 SD', desc: 'Target Juz 30 Tuntas' },
+                    { value: 4, label: 'Kelas 4 SD', desc: 'Target Juz 29 Awal' },
+                    { value: 5, label: 'Kelas 5 SD', desc: 'Target Juz 29 Lanjutan' },
+                    { value: 6, label: 'Kelas 6 SD', desc: 'Target Munaqosyah Akhir' }
+                  ]}
+                />
               </div>
 
               <div>
@@ -1792,6 +2263,263 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TAMBAH / EDIT MATERI HAFALAN ANAK (PORTAL ORANG TUA) */}
+      {showMaterialModal && currentChild && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border-2 border-emerald-500/20 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-800">
+                    {editingMaterial ? 'Edit Materi Hafalan Anak' : 'Tambah Materi Hafalan Baru'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Santri: <strong className="text-emerald-700">{currentChild.full_name}</strong> (Kelas {currentChild.current_grade || 1} SD)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMaterialModal(false);
+                  setEditingMaterial(null);
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveMaterialSubmit} className="space-y-3.5 text-xs">
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Judul Materi Hafalan (Surat / Hadis / Doa) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Contoh: Surat Al-Mulk (Ayat 1-10) / Hadis Kasih Sayang"
+                  value={matTitle}
+                  onChange={(e) => setMatTitle(e.target.value)}
+                  className="w-full text-xs font-bold p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <ParentElegantDropdown
+                  label="Kategori Materi *"
+                  value={matCategory}
+                  onChange={(val) => setMatCategory(val as CurriculumCategory)}
+                  options={[
+                    { value: 'QURAN', label: '📖 Al-Qur\'an', desc: 'Tahfidz Surat/Ayat' },
+                    { value: 'HADITH', label: '📜 Hadis Nabi ﷺ', desc: 'Matan & Arti' },
+                    { value: 'DOA', label: '🤲 Doa Harian', desc: 'Adab & Sunnah' }
+                  ]}
+                />
+
+                <ParentElegantDropdown
+                  label="Target Ujian *"
+                  value={matCycle}
+                  onChange={(val) => setMatCycle(val as ExamType)}
+                  options={[
+                    { value: 'PTS_1', label: 'PTS 1 (Ganjil)', desc: 'Tengah Semester 1' },
+                    { value: 'PAS_1', label: 'PAS 1 (Ganjil)', desc: 'Akhir Semester 1' },
+                    { value: 'PTS_2', label: 'PTS 2 (Genap)', desc: 'Tengah Semester 2' },
+                    { value: 'PAS_2', label: 'PAS 2 (Genap)', desc: 'Akhir Semester 2' }
+                  ]}
+                />
+
+                <ParentElegantDropdown
+                  label="Target Ulang (Pass) *"
+                  value={matTargetPass}
+                  onChange={(val) => setMatTargetPass(Number(val))}
+                  options={[
+                    { value: 3, label: '3x Ulang', desc: 'Doa pendek' },
+                    { value: 5, label: '5x Ulang (Standar)', desc: 'Standar Mutqin SDIT' },
+                    { value: 7, label: '7x Ulang', desc: 'Surat panjang' },
+                    { value: 10, label: '10x Ulang', desc: 'Tahfidz intensif' }
+                  ]}
+                />
+              </div>
+
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Teks Arab (Rasm Utsmani)
+                </label>
+                <textarea
+                  rows={2}
+                  dir="rtl"
+                  placeholder="تَبَارَكَ الَّذِي بِيَدِهِ الْمُلْكُ وَهُوَ عَلَىٰ كُلِّ شَيْءٍ قَدِيرٌ"
+                  value={matArabic}
+                  onChange={(e) => setMatArabic(e.target.value)}
+                  className="w-full text-sm font-arabic p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Transliterasi Latin (Bantuan Baca Anak)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Tabaarakalladzii biyadihil mulku wa huwa 'alaa kulli syai-in qadiir"
+                  value={matLatin}
+                  onChange={(e) => setMatLatin(e.target.value)}
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-extrabold text-slate-700 block mb-1">
+                    Arti / Terjemahan Bahasa Indonesia
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Maha Suci Allah yang di tangan-Nya segala kerajaan..."
+                    value={matTranslation}
+                    onChange={(e) => setMatTranslation(e.target.value)}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-extrabold text-slate-700 block mb-1">
+                    Sumber / Rujukan Dalil
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: Al-Qur'an Juz 29 / HR. Bukhari & Muslim"
+                    value={matSource}
+                    onChange={(e) => setMatSource(e.target.value)}
+                    className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMaterialModal(false);
+                    setEditingMaterial(null);
+                  }}
+                  className="btn-chunky-ghost py-2 px-3.5 text-xs"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="btn-chunky-emerald py-2 px-5 text-xs shadow-chunky-emerald"
+                >
+                  {editingMaterial ? 'Simpan Perubahan Materi' : 'Tambahkan ke Daftar Hafalan Anak'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL KATALOG KURIKULUM STANDAR SDIT (1-KLIK TAMBAH KE ANAK) */}
+      {showCatalogModal && currentChild && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 shadow-2xl border-2 border-emerald-500/20 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-800 border border-amber-300">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-slate-800">
+                    Katalog Kurikulum Standar SDIT (1-Klik Tambah)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Pilih kisi-kisi resmi Al-Qur'an, Hadis, &amp; Doa untuk ditambahkan ke akun <strong className="text-emerald-700">{currentChild.full_name}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCatalogModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+              {SDIT_CURRICULUM_CATALOG.map((tpl) => {
+                const alreadyAssigned = allChildMaterials.some(
+                  m => m.curriculum_title.toLowerCase() === tpl.title.toLowerCase()
+                );
+
+                return (
+                  <div
+                    key={tpl.code}
+                    className={`p-3.5 rounded-2xl border-2 flex flex-wrap items-center justify-between gap-3 transition-all ${
+                      alreadyAssigned
+                        ? 'bg-emerald-50/50 border-emerald-200'
+                        : 'bg-white border-slate-200 hover:border-amber-300'
+                    }`}
+                  >
+                    <div className="space-y-1 flex-1 min-w-[220px]">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                          tpl.category === 'QURAN'
+                            ? 'bg-emerald-100 text-emerald-900'
+                            : tpl.category === 'HADITH'
+                            ? 'bg-amber-100 text-amber-900'
+                            : 'bg-sky-100 text-sky-900'
+                        }`}>
+                          {tpl.category}
+                        </span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          Rekomendasi Kelas {tpl.recommended_grade} SD &bull; {tpl.exam_cycle_id.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <div className="text-sm font-black text-slate-800">{tpl.title}</div>
+                      <div className="text-xs font-arabic text-emerald-900">{tpl.arabic_text}</div>
+                      <div className="text-[11px] text-slate-500 italic">"{tpl.translation}" ({tpl.source})</div>
+                    </div>
+
+                    <div>
+                      {alreadyAssigned ? (
+                        <span className="px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-black inline-flex items-center gap-1">
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Sudah Ada di Anak</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleAddFromCatalog(tpl)}
+                          className="btn-chunky py-2 px-3.5 text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black inline-flex items-center gap-1.5"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Tambahkan ke Anak</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowCatalogModal(false)}
+                className="btn-chunky py-2 px-5 text-xs bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold"
+              >
+                Selesai
+              </button>
+            </div>
           </div>
         </div>
       )}
