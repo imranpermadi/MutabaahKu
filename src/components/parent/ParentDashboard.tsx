@@ -93,40 +93,24 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
   const [newChildGrade, setNewChildGrade] = useState<number>(1);
   const [newChildSchool, setNewChildSchool] = useState('SDIT Imam Bukhari');
   const [isSubmittingChild, setIsSubmittingChild] = useState(false);
+  const [childModalError, setChildModalError] = useState<string | null>(null);
 
   // Filter profil anak yang valid (mencegah error 'c is undefined')
   const validChildren = (allChildren || []).filter((c): c is UserProfile => Boolean(c && c.id));
   if (childProfile && childProfile.id && !validChildren.some(c => c.id === childProfile.id)) {
-    validChildren.unshift(childProfile);
+    if (!childProfile.parent_id || childProfile.parent_id === parentProfile.id) {
+      validChildren.unshift(childProfile);
+    }
   }
 
-  // Profil fallback jika database santri sedang dimuat atau belum ada anak terdaftar
-  const defaultFallbackChild: UserProfile = {
-    id: 'demo-hafiz',
-    full_name: 'Muhammad Hafiz',
-    email: 'hafiz@mutabaahku.id',
-    role: 'STUDENT',
-    gender: 'PUTRA',
-    current_grade: 3,
-    school_name: 'SDIT Imam Bukhari',
-    prayer_city_id: '58a2fc6ed39fd083f55d4182bf88826d',
-    prayer_city_name: 'KOTA MEDAN',
-    latitude: 3.5952,
-    longitude: 98.6722,
-    qibla_bearing: 292.8,
-    daily_streak: 1,
-    star_points: 0,
-    water_drops: 0,
-    garden_tree_level: 1,
-    unlocked_stickers: []
-  };
-
-  const effectiveChildren = validChildren.length > 0 ? validChildren : (childProfile ? [childProfile] : [defaultFallbackChild]);
+  const effectiveChildren = validChildren;
   const targetId = activeChildId || childProfile?.id || effectiveChildren[0]?.id;
-  const currentChild = effectiveChildren.find(c => Boolean(c && c.id === targetId)) || effectiveChildren[0] || defaultFallbackChild;
+  const currentChild = effectiveChildren.find(c => Boolean(c && c.id === targetId)) || effectiveChildren[0] || null;
 
   // Filter checklists and logs for the active child
-  const childChecklists = pendingChecklists.filter(c => Boolean(c && c.student_id === currentChild.id));
+  const childChecklists = currentChild
+    ? pendingChecklists.filter(c => Boolean(c && c.student_id === currentChild.id))
+    : [];
 
   const handleApproveChecklist = (id: string, grade: 'L' | 'BL') => {
     confetti({
@@ -150,16 +134,17 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
 
   const handleAddChildSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newChildName.trim() || !onAddChild) return;
+    if (!newChildEmail.trim() || !onAddChild) return;
 
     setIsSubmittingChild(true);
+    setChildModalError(null);
     try {
       await onAddChild({
-        fullName: newChildName.trim(),
-        email: newChildEmail.trim() || `${newChildName.toLowerCase().replace(/\s+/g, '')}@mutabaahku.id`,
+        email: newChildEmail.trim().toLowerCase(),
+        fullName: newChildName.trim() || newChildEmail.split('@')[0],
         gender: newChildGender,
         grade: newChildGrade,
-        schoolName: newChildSchool.trim() || 'SDIT Imam Bukhari'
+        schoolName: newChildSchool.trim() || 'SDIT'
       });
 
       confetti({
@@ -172,13 +157,14 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
       setNewChildName('');
       setNewChildEmail('');
     } catch (err: any) {
-      alert('Gagal menambah profil anak: ' + err.message);
+      setChildModalError(err.message || 'Gagal menghubungkan profil anak.');
     } finally {
       setIsSubmittingChild(false);
     }
   };
 
   const handleExportPDF = () => {
+    if (!currentChild) return;
     const doc = new jsPDF();
 
     // Title & Header
@@ -243,13 +229,15 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
           </div>
 
           {/* Export PDF Button */}
-          <button
-            onClick={handleExportPDF}
-            className="btn-chunky py-2.5 px-4 text-xs bg-amber-400 hover:bg-amber-300 text-amber-950 border-b-4 border-amber-600 active:border-b-0 shadow-md font-extrabold flex items-center gap-2"
-          >
-            <FileDown className="w-4 h-4" />
-            <span>Ekspor PDF Rapor ({currentChild.full_name.split(' ')[0]})</span>
-          </button>
+          {currentChild && (
+            <button
+              onClick={handleExportPDF}
+              className="btn-chunky py-2.5 px-4 text-xs bg-amber-400 hover:bg-amber-300 text-amber-950 border-b-4 border-amber-600 active:border-b-0 shadow-md font-extrabold flex items-center gap-2"
+            >
+              <FileDown className="w-4 h-4" />
+              <span>Ekspor PDF Rapor ({currentChild.full_name.split(' ')[0]})</span>
+            </button>
+          )}
         </div>
 
         {/* PEMBAGIAN ANAK-ANAK YANG DIKONTROL (CHILD SELECTOR / SWITCHER) */}
@@ -260,42 +248,99 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               <span>Pembagian Anak yang Dikontrol:</span>
             </div>
             <button
-              onClick={() => setShowAddChildModal(true)}
+              onClick={() => {
+                setChildModalError(null);
+                setShowAddChildModal(true);
+              }}
               className="text-[11px] font-black px-2.5 py-1 rounded-xl bg-emerald-700/80 hover:bg-emerald-600 text-emerald-100 border border-emerald-400/40 flex items-center gap-1 transition-all active:scale-95"
             >
               <Plus className="w-3.5 h-3.5 text-amber-300" />
-              <span>+ Tambah / Hubungkan Anak</span>
+              <span>+ Hubungkan Akun Anak</span>
             </button>
           </div>
 
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {effectiveChildren.map((child) => {
-              if (!child || !child.id) return null;
-              const isSelected = child.id === currentChild?.id;
-              return (
-                <button
-                  key={child.id}
-                  onClick={() => onSelectChild && onSelectChild(child.id)}
-                  className={`px-3.5 py-2 rounded-2xl text-xs font-black flex items-center gap-2 transition-all whitespace-nowrap active:scale-95 ${
-                    isSelected
-                      ? 'bg-amber-400 text-amber-950 shadow-chunky-amber border border-amber-500'
-                      : 'bg-white/15 hover:bg-white/25 text-white border border-white/20'
-                  }`}
-                >
-                  <span className="text-base">{child.gender === 'PUTRI' ? '👧' : '👦'}</span>
-                  <div className="text-left">
-                    <span className="block font-black leading-tight">{child.full_name}</span>
-                    <span className={`text-[10px] block ${isSelected ? 'text-amber-900 font-bold' : 'text-emerald-200'}`}>
-                      Kelas {child.current_grade || 1} SD &bull; {child.school_name || 'SDIT'}
-                    </span>
-                  </div>
-                  {isSelected && <Check className="w-4 h-4 text-amber-950 ml-0.5" />}
-                </button>
-              );
-            })}
+            {effectiveChildren.length === 0 ? (
+              <span className="text-xs text-emerald-200/90 font-medium italic">
+                Belum ada anak yang terhubung. Klik "+ Hubungkan Akun Anak" di atas.
+              </span>
+            ) : (
+              effectiveChildren.map((child) => {
+                if (!child || !child.id) return null;
+                const isSelected = child.id === currentChild?.id;
+                return (
+                  <button
+                    key={child.id}
+                    onClick={() => onSelectChild && onSelectChild(child.id)}
+                    className={`px-3.5 py-2 rounded-2xl text-xs font-black flex items-center gap-2 transition-all whitespace-nowrap active:scale-95 ${
+                      isSelected
+                        ? 'bg-amber-400 text-amber-950 shadow-chunky-amber border border-amber-500'
+                        : 'bg-white/15 hover:bg-white/25 text-white border border-white/20'
+                    }`}
+                  >
+                    <span className="text-base">{child.gender === 'PUTRI' ? '👧' : '👦'}</span>
+                    <div className="text-left">
+                      <span className="block font-black leading-tight">{child.full_name}</span>
+                      <span className={`text-[10px] block ${isSelected ? 'text-amber-900 font-bold' : 'text-emerald-200'}`}>
+                        Kelas {child.current_grade || 1} SD &bull; {child.school_name || 'SDIT'}
+                      </span>
+                    </div>
+                    {isSelected && <Check className="w-4 h-4 text-amber-950 ml-0.5" />}
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
       </div>
+
+      {!currentChild ? (
+        <div className="bg-white rounded-3xl p-8 sm:p-12 border-2 border-dashed border-emerald-300 text-center space-y-5 shadow-sm">
+          <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto rounded-3xl bg-emerald-100 border-2 border-emerald-300 flex items-center justify-center text-3xl sm:text-4xl shadow-inner">
+            👨‍👩‍👧‍👦
+          </div>
+          <div className="max-w-md mx-auto space-y-2">
+            <h3 className="text-xl sm:text-2xl font-black text-slate-800">
+              Belum Ada Akun Anak yang Terhubung
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+              Hubungkan akun anak Anda dengan memasukkan alamat email yang mereka gunakan saat login ke MutabaahKu.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-2xl mx-auto text-left">
+            <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200">
+              <div className="w-6 h-6 rounded-lg bg-emerald-600 text-white font-black text-xs flex items-center justify-center mb-2">1</div>
+              <div className="font-extrabold text-xs text-emerald-950">Masukkan Email Anak</div>
+              <p className="text-[11px] text-emerald-800/80 mt-1">Gunakan email Google SSO anak (misal: roenscuy@gmail.com).</p>
+            </div>
+            <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200">
+              <div className="w-6 h-6 rounded-lg bg-amber-500 text-white font-black text-xs flex items-center justify-center mb-2">2</div>
+              <div className="font-extrabold text-xs text-amber-950">Anak Login di HP-nya</div>
+              <p className="text-[11px] text-amber-800/80 mt-1">Saat anak login dengan email tersebut, otomatis langsung terhubung.</p>
+            </div>
+            <div className="p-3.5 rounded-2xl bg-teal-50/70 border border-teal-200">
+              <div className="w-6 h-6 rounded-lg bg-teal-600 text-white font-black text-xs flex items-center justify-center mb-2">3</div>
+              <div className="font-extrabold text-xs text-teal-950">Pantau Real-Time</div>
+              <p className="text-[11px] text-teal-800/80 mt-1">Setoran sholat, puasa & hafalan anak langsung masuk ke portal Anda.</p>
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <button
+              onClick={() => {
+                setChildModalError(null);
+                setShowAddChildModal(true);
+              }}
+              className="btn-chunky py-3 px-6 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl shadow-chunky-emerald inline-flex items-center gap-2 active:scale-95 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ Hubungkan Akun Anak Sekarang</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
 
       {/* Kartu Status Anak yang Sedang Dipilih */}
       <div className="bg-white rounded-3xl p-4 sm:p-5 border-2 border-emerald-500/20 shadow-sm flex flex-wrap items-center justify-between gap-4">
@@ -1047,53 +1092,72 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
           </div>
         );
       })()}
+      </>
+      )}
 
-      {/* MODAL TAMBAH / HUBUNGKAN ANAK BARU */}
+      {/* MODAL TAMBAH / HUBUNGKAN ANAK KE AKUN ORANG TUA */}
       {showAddChildModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-4xl max-w-md w-full p-6 shadow-2xl relative border-2 border-emerald-500/30">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border-2 border-emerald-500/20 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700">
-                  <Users className="w-4 h-4" />
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 flex items-center justify-center text-emerald-700">
+                  <User className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-black text-slate-800">
-                    Hubungkan Anak Baru ke Akun Orang Tua
+                    Hubungkan Akun Anak ke Orang Tua
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Wali: {parentProfile.full_name}
+                    Akun Wali: {parentProfile.full_name} ({parentProfile.email})
                   </p>
                 </div>
               </div>
               <button
-                onClick={() => setShowAddChildModal(false)}
+                onClick={() => {
+                  setShowAddChildModal(false);
+                  setChildModalError(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 p-1"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {childModalError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-semibold flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                <span>{childModalError}</span>
+              </div>
+            )}
+
             <form onSubmit={handleAddChildSubmit} className="mt-4 space-y-3.5 text-xs">
               <div>
-                <label className="font-extrabold text-slate-700 block mb-1">Nama Lengkap Anak *</label>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Email Akun Google Anak *
+                </label>
                 <input
-                  type="text"
+                  type="email"
                   required
-                  placeholder="Contoh: Maryam Sholihah"
-                  value={newChildName}
-                  onChange={(e) => setNewChildName(e.target.value)}
-                  className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  placeholder="Contoh: roenscuy@gmail.com"
+                  value={newChildEmail}
+                  onChange={(e) => setNewChildEmail(e.target.value)}
+                  className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none font-semibold"
                 />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Email Google SSO yang digunakan anak untuk login. Jika anak belum pernah login, akun akan otomatis terhubung saat ia pertama kali login.
+                </p>
               </div>
 
               <div>
-                <label className="font-extrabold text-slate-700 block mb-1">Email Akun Anak (Opsional)</label>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Nama Lengkap / Panggilan Anak (Opsional)
+                </label>
                 <input
-                  type="email"
-                  placeholder="maryam@mutabaahku.id"
-                  value={newChildEmail}
-                  onChange={(e) => setNewChildEmail(e.target.value)}
+                  type="text"
+                  placeholder="Contoh: Roens Sholih"
+                  value={newChildName}
+                  onChange={(e) => setNewChildName(e.target.value)}
                   className="w-full text-xs p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
@@ -1142,7 +1206,10 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
               <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowAddChildModal(false)}
+                  onClick={() => {
+                    setShowAddChildModal(false);
+                    setChildModalError(null);
+                  }}
                   className="btn-chunky-ghost py-2 px-3 text-xs"
                 >
                   Batal
@@ -1152,7 +1219,7 @@ export const ParentDashboard: React.FC<ParentDashboardProps> = ({
                   disabled={isSubmittingChild}
                   className="btn-chunky-emerald py-2 px-4 text-xs shadow-chunky-emerald"
                 >
-                  {isSubmittingChild ? 'Menyimpan...' : 'Simpan & Hubungkan'}
+                  {isSubmittingChild ? 'Menghubungkan...' : 'Simpan & Hubungkan'}
                 </button>
               </div>
             </form>

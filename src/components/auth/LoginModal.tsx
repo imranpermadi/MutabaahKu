@@ -169,74 +169,29 @@ export function LoginModal({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
             </div>
           )}
 
-          {/* Quick Demo Login Pills (Sangat praktis untuk review langsung) */}
-          <div className="bg-emerald-50/80 border-2 border-emerald-300/80 rounded-2xl p-3.5 space-y-2.5">
-            <div className="flex items-center justify-between text-xs font-black text-emerald-950">
-              <span className="flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-amber-500 fill-amber-500" />
-                <span>Masuk Cepat 1-Klik (Mode Demo / Review):</span>
-              </span>
-              <span className="text-[10px] font-mono bg-emerald-100 text-emerald-800 border border-emerald-300 px-1.5 py-0.5 rounded-md font-bold">
-                Instan
-              </span>
+          {/* Masuk Cepat untuk Akun Utama imranpermadi@gmail.com */}
+          <button
+            type="button"
+            onClick={() => handleQuickLogin('imranpermadi@gmail.com', 'Ustadz Imran Permadi')}
+            className="w-full p-2.5 rounded-2xl bg-emerald-50/80 hover:bg-emerald-100/70 border-2 border-emerald-300/80 text-left transition-all active:scale-98 shadow-2xs flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center text-sm font-black shadow-2xs">
+                🛡️
+              </div>
+              <div>
+                <span className="block text-xs font-black text-slate-800">
+                  Masuk Cepat: Ustadz Imran Permadi
+                </span>
+                <span className="block text-[10px] text-slate-500 font-mono">
+                  imranpermadi@gmail.com (Orang Tua / Admin)
+                </span>
+              </div>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('imranpermadi@gmail.com', 'Ustadz Imran Permadi')}
-                className="p-2.5 rounded-xl bg-white hover:bg-emerald-100/70 border-2 border-emerald-400 text-left transition-all active:scale-95 shadow-sm group flex items-center gap-2"
-              >
-                <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center flex-shrink-0 text-sm font-black shadow-2xs">
-                  🛡️
-                </div>
-                <div className="min-w-0">
-                  <span className="block text-xs font-black text-slate-800 truncate group-hover:text-emerald-800">
-                    Admin
-                  </span>
-                  <span className="block text-[10px] text-slate-500 truncate font-mono">
-                    imranpermadi...
-                  </span>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('orangtua@mutabaahku.id', 'Abu Hafiz & Ummu Hafiz')}
-                className="p-2.5 rounded-xl bg-white hover:bg-teal-100/70 border-2 border-teal-400 text-left transition-all active:scale-95 shadow-sm group flex items-center gap-2"
-              >
-                <div className="w-7 h-7 rounded-lg bg-teal-600 text-white flex items-center justify-center flex-shrink-0 text-sm font-black shadow-2xs">
-                  👨‍👩‍👧
-                </div>
-                <div className="min-w-0">
-                  <span className="block text-xs font-black text-slate-800 truncate group-hover:text-teal-800">
-                    Orang Tua
-                  </span>
-                  <span className="block text-[10px] text-slate-500 truncate font-mono">
-                    orangtua@...
-                  </span>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('hafiz@mutabaahku.id', 'Muhammad Hafiz')}
-                className="p-2.5 rounded-xl bg-white hover:bg-amber-100/70 border-2 border-amber-400 text-left transition-all active:scale-95 shadow-sm group flex items-center gap-2"
-              >
-                <div className="w-7 h-7 rounded-lg bg-amber-500 text-white flex items-center justify-center flex-shrink-0 text-sm font-black shadow-2xs">
-                  👦
-                </div>
-                <div className="min-w-0">
-                  <span className="block text-xs font-black text-slate-800 truncate group-hover:text-amber-800">
-                    Santri
-                  </span>
-                  <span className="block text-[10px] text-slate-500 truncate font-mono">
-                    hafiz@...
-                  </span>
-                </div>
-              </button>
-            </div>
-          </div>
+            <span className="text-[10px] font-bold bg-emerald-200/80 text-emerald-900 px-2 py-0.5 rounded-lg">
+              1-Klik
+            </span>
+          </button>
 
           {/* OPSI 1: Google SSO (Paling Direkomendasikan) */}
           <button

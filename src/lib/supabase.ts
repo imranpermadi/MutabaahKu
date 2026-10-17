@@ -85,15 +85,29 @@ export async function queueOfflineAction(
   }
 }
 
+let queueSyncing = false;
+
 /**
- * Memproses antrean sinkronisasi lokal ke Supabase Cloud (Push)
+ * Memproses antrean sinkronisasi lokal ke Supabase Cloud (Push).
+ * Item berstatus FAILED (mis. karena offline) ikut dicoba ulang.
  */
 export async function syncOfflineQueueToSupabase(): Promise<{ synced: number; failed: number }> {
-  if (!supabase) {
+  if (!supabase || queueSyncing) {
     return { synced: 0, failed: 0 };
   }
+  queueSyncing = true;
 
-  const pendingItems = await db.sync_queue.where('status').equals('PENDING').toArray();
+  try {
+    return await processSyncQueue();
+  } finally {
+    queueSyncing = false;
+  }
+}
+
+async function processSyncQueue(): Promise<{ synced: number; failed: number }> {
+  if (!supabase) return { synced: 0, failed: 0 };
+
+  const pendingItems = await db.sync_queue.where('status').anyOf('PENDING', 'FAILED').toArray();
   let synced = 0;
   let failed = 0;
 
@@ -148,11 +162,14 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
   const tableCounts: Record<string, number> = {};
   let totalPulled = 0;
 
+  // Data yang baru ditarik dari cloud tidak perlu diantrekan lagi untuk di-push balik
+  suppressSyncHooks = true;
   try {
     // 1. Ambil Profil Pengguna berdasarkan email atau session
     let profileQuery = supabase.from('user_profiles').select('*');
     if (userEmail) {
-      profileQuery = profileQuery.eq('email', userEmail);
+      // ilike = tidak sensitif huruf besar/kecil; escape wildcard LIKE agar cocok persis
+      profileQuery = profileQuery.ilike('email', userEmail.trim().replace(/[\\%_]/g, (m) => '\\' + m));
     }
     const { data: profiles, error: profileErr } = await profileQuery;
     if (profileErr) throw profileErr;
@@ -167,6 +184,20 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
       const studentIds = profiles
         .filter(p => p.role === 'STUDENT')
         .map(p => p.id);
+
+      // Jika role adalah anak, tarik juga profil orang tua yang terhubung (parent_id)
+      const linkedParentIds = profiles
+        .filter(p => p.role === 'STUDENT' && p.parent_id)
+        .map(p => p.parent_id as string);
+      if (linkedParentIds.length > 0) {
+        const { data: linkedParents } = await supabase
+          .from('user_profiles')
+          .select('*')
+          .in('id', linkedParentIds);
+        if (linkedParents && linkedParents.length > 0) {
+          await db.user_profiles.bulkPut(linkedParents);
+        }
+      }
 
       // Jika role adalah parent, cari profil anak-anaknya di cloud
       const parentIds = profiles.filter(p => p.role === 'PARENT').map(p => p.id);
@@ -287,6 +318,8 @@ export async function pullRemoteDataFromSupabase(userEmail?: string): Promise<{
     }
   } catch (err: any) {
     console.warn('Error during pullRemoteDataFromSupabase:', err.message);
+  } finally {
+    suppressSyncHooks = false;
   }
 
   return { pulledCount: totalPulled, tables: tableCounts };
@@ -341,7 +374,11 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
     const pushQueueResult = await syncOfflineQueueToSupabase();
     let totalPushed = pushQueueResult.synced;
 
-    // Langkah 2: Push snapshot lokal untuk seluruh 10 TABEL ke Supabase
+    // Langkah 2: Pull data terbaru dari cloud DULU, supaya snapshot lokal yang usang
+    // tidak menimpa setoran / paraf terbaru dari perangkat lain.
+    const pullResult = await pullRemoteDataFromSupabase(userEmail);
+
+    // Langkah 3: Push snapshot lokal untuk seluruh 10 TABEL ke Supabase
     // 1. Profil Pengguna
     const localProfiles = await db.user_profiles.toArray();
     if (localProfiles.length > 0) {
@@ -452,8 +489,7 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       }
     }
 
-    // Langkah 3: Pull data dari Cloud ke Lokal
-    const pullResult = await pullRemoteDataFromSupabase(userEmail);
+    // Pull sudah dijalankan pada Langkah 2
 
     // Simpan timestamp sinkronisasi terakhir di browser
     localStorage.setItem('mutabaahku_last_synced', timestamp);
@@ -476,4 +512,102 @@ export async function executeFullSync(userEmail?: string): Promise<SyncResult> {
       error: err.message || 'Gagal menyinkronkan data dengan Cloud.'
     };
   }
+}
+
+// ============================================================================
+// AUTO-SYNC: SETIAP PENULISAN KE DEXIE OTOMATIS DIANTREKAN KE CLOUD
+// Inilah yang membuat setoran anak langsung terlihat di akun orang tua
+// (dan paraf orang tua langsung terlihat di akun anak) tanpa menekan tombol Sync.
+// ============================================================================
+
+let suppressSyncHooks = false;
+
+const AUTO_SYNC_TABLES = [
+  'user_profiles',
+  'academic_levels',
+  'exam_cycles',
+  'curriculum_items',
+  'content_units',
+  'murojaah_checklists',
+  'fsrs_memory_states',
+  'mutabaah_logs',
+  'ibadah_daily_logs',
+  'sholat_learning_progress'
+] as const;
+
+const pendingChanges = new Map<string, { table: string; id: string; deleted: boolean }>();
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function flushPendingChanges() {
+  flushTimer = null;
+  const changes = Array.from(pendingChanges.values());
+  pendingChanges.clear();
+
+  for (const change of changes) {
+    try {
+      if (change.deleted) {
+        await db.sync_queue.add({
+          table_name: change.table,
+          operation: 'DELETE',
+          record_id: change.id,
+          payload: {},
+          status: 'PENDING',
+          created_at: new Date().toISOString()
+        });
+      } else {
+        const row = await (db as any)[change.table].get(change.id);
+        if (!row) continue;
+        await db.sync_queue.add({
+          table_name: change.table,
+          operation: 'INSERT', // upsert penuh berdasarkan id
+          record_id: change.id,
+          payload: row,
+          status: 'PENDING',
+          created_at: new Date().toISOString()
+        });
+      }
+    } catch (err) {
+      console.warn('Gagal mengantrekan perubahan untuk sinkronisasi:', err);
+    }
+  }
+
+  if (navigator.onLine) {
+    syncOfflineQueueToSupabase().catch(console.error);
+  }
+}
+
+function scheduleChange(table: string, id: string, deleted: boolean) {
+  pendingChanges.set(`${table}:${id}`, { table, id, deleted });
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushPendingChanges, 400);
+  }
+}
+
+if (isSupabaseConfigured) {
+  for (const tableName of AUTO_SYNC_TABLES) {
+    const table = (db as any)[tableName];
+    table.hook('creating', function (this: any, primKey: any, obj: any) {
+      if (suppressSyncHooks) return;
+      const id = primKey ?? obj?.id;
+      this.onsuccess = (key: any) => scheduleChange(tableName, String(key ?? id), false);
+    });
+    table.hook('updating', function (this: any, _mods: any, primKey: any) {
+      if (suppressSyncHooks) return;
+      this.onsuccess = () => scheduleChange(tableName, String(primKey), false);
+    });
+    table.hook('deleting', function (this: any, primKey: any) {
+      if (suppressSyncHooks) return;
+      this.onsuccess = () => scheduleChange(tableName, String(primKey), true);
+    });
+  }
+}
+
+/**
+ * Sinkronisasi ringan berkala: dorong antrean lalu tarik data terbaru dari cloud.
+ * Dipanggil oleh App secara periodik agar dua perangkat (anak & orang tua) tetap sinkron.
+ */
+export async function backgroundSync(userEmail: string) {
+  if (!supabase || !navigator.onLine) return;
+  await syncOfflineQueueToSupabase();
+  await pullRemoteDataFromSupabase(userEmail);
 }

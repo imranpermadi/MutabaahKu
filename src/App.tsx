@@ -17,9 +17,11 @@ import {
   Download,
   X
 } from 'lucide-react';
-import { db, seedInitialData, addChildProfile, deleteChildProfile } from './lib/db';
-import { syncOfflineQueueToSupabase, isSupabaseConfigured, supabase, executeFullSync } from './lib/supabase';
+import { db, purgeDemoData, ensureStarterChecklists, deleteChildProfile, todayLocal } from './lib/db';
+import { isSupabaseConfigured, supabase, executeFullSync, pullRemoteDataFromSupabase, backgroundSync } from './lib/supabase';
+import { linkChildByEmail, unlinkChild } from './lib/linking';
 import { UserRole, UserGender, UserProfile, IbadahDailyLog } from './types/database';
+import { ParentLinkCard } from './components/linking/ParentLinkCard';
 import { MascotCharacter } from './components/mascot/MascotCharacter';
 import { SholatAnimator } from './components/prayer/SholatAnimator';
 import { PrayerTimesCard } from './components/prayer/PrayerTimesCard';
@@ -56,7 +58,7 @@ export function App() {
 
   // Initialize offline seed data, listen for Google SSO Auth, and listen for PWA install prompt
   useEffect(() => {
-    seedInitialData();
+    purgeDemoData().catch(console.error);
 
     // PWA Install Event Listener
     const handleBeforeInstall = (e: any) => {
@@ -117,18 +119,25 @@ export function App() {
 
   const handleAuthUser = async (user: any) => {
     setCurrentUser(user);
-    const existing = await db.user_profiles.where('email').equals(user.email || '').first();
+    const email = (user.email || '').trim().toLowerCase();
+    let existing = await db.user_profiles.where('email').equalsIgnoreCase(email).first();
+
+    // Tarik profil terbaru dari cloud: tautan orang tua↔anak bisa saja dibuat dari perangkat lain
+    if (supabase && navigator.onLine && email) {
+      try {
+        await pullRemoteDataFromSupabase(email);
+        existing = (await db.user_profiles.where('email').equalsIgnoreCase(email).first()) || existing;
+      } catch (e) {
+        console.warn('Gagal menarik profil dari cloud saat login:', e);
+      }
+    }
+
     if (existing && existing.role) {
       setCurrentRole(existing.role);
-    } else {
-      if (supabase) {
-        const { data: cloudProfiles } = await supabase.from('user_profiles').select('*').eq('email', user.email);
-        if (cloudProfiles && cloudProfiles.length > 0 && cloudProfiles[0].role) {
-          await db.user_profiles.put(cloudProfiles[0]);
-          setCurrentRole(cloudProfiles[0].role);
-          return;
-        }
+      if (existing.role === 'STUDENT') {
+        await ensureStarterChecklists(existing.id, existing.current_grade || 1);
       }
+    } else {
       setShowRolePicker(true);
     }
   };
@@ -140,7 +149,7 @@ export function App() {
     if (currentUser) {
       const newProfile: UserProfile = {
         id: currentUser.id,
-        email: currentUser.email,
+        email: (currentUser.email || '').trim().toLowerCase(),
         full_name: currentUser.user_metadata?.full_name || (selectedRole === 'PARENT' ? 'Orang Tua' : 'Anak Sholih'),
         role: selectedRole,
         gender: 'PUTRA',
@@ -156,17 +165,37 @@ export function App() {
         unlocked_stickers: ['sticker_welcome_star']
       };
       await db.user_profiles.put(newProfile);
-      if (supabase) {
-        await supabase.from('user_profiles').upsert(newProfile, { onConflict: 'id' });
+      if (selectedRole === 'STUDENT') {
+        await ensureStarterChecklists(newProfile.id, 1);
       }
     }
   };
 
+  // Periodic Background Sync (tiap 15 detik jika user login & online)
+  useEffect(() => {
+    if (!currentUser?.email) return;
+    const interval = setInterval(() => {
+      if (navigator.onLine) {
+        backgroundSync(currentUser.email).catch(() => {});
+      }
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [currentUser?.email]);
+
   // Dexie Live Queries
-  const studentProfile = useLiveQuery(() => db.user_profiles.where('role').equals('STUDENT').first());
+  const studentProfile = useLiveQuery(async () => {
+    if (currentUser?.email) {
+      const byEmail = await db.user_profiles.where('email').equalsIgnoreCase(currentUser.email).first();
+      if (byEmail && byEmail.role === 'STUDENT') return byEmail;
+      if (byEmail) return byEmail;
+    }
+    return db.user_profiles.where('role').equals('STUDENT').first();
+  }, [currentUser?.email]);
+
   const parentProfile = useLiveQuery(async () => {
     if (currentUser?.email) {
-      const byEmail = await db.user_profiles.where('email').equals(currentUser.email).first();
+      const byEmail = await db.user_profiles.where('email').equalsIgnoreCase(currentUser.email).first();
+      if (byEmail && byEmail.role === 'PARENT') return byEmail;
       if (byEmail) return byEmail;
     }
     return db.user_profiles.where('role').equals('PARENT').first();
@@ -174,20 +203,56 @@ export function App() {
 
   const allChildren = useLiveQuery(async () => {
     if (parentProfile?.id) {
-      const myKids = await db.user_profiles.where('parent_id').equals(parentProfile.id).toArray();
-      if (myKids.length > 0) return myKids;
+      return db.user_profiles.where('parent_id').equals(parentProfile.id).toArray();
     }
-    return db.user_profiles.where('role').equals('STUDENT').toArray();
+    return [];
   }, [parentProfile?.id]) || [];
-  
-  // Active child being monitored or practicing
-  const activeChild = (allChildren.find(c => Boolean(c && c.id === selectedChildId)) || studentProfile || allChildren[0]) as UserProfile | undefined;
-  
-  const checklists = useLiveQuery(() => 
-    db.murojaah_checklists.toArray()
-  ) || [];
 
-  const today = new Date().toISOString().split('T')[0];
+  const linkedParent = useLiveQuery(async () => {
+    if (studentProfile?.parent_id) {
+      return db.user_profiles.get(studentProfile.parent_id);
+    }
+    return null;
+  }, [studentProfile?.parent_id]);
+
+  // Fallback tamu jika pengunjung belum login agar demo tetap bisa dicoba
+  const guestStudentFallback: UserProfile = {
+    id: 'guest-student',
+    full_name: 'Anak Sholih',
+    email: '',
+    role: 'STUDENT',
+    gender: 'PUTRA',
+    current_grade: 1,
+    school_name: 'SDIT MutabaahKu',
+    prayer_city_id: '58a2fc6ed39fd083f55d4182bf88826d',
+    prayer_city_name: 'KOTA MEDAN',
+    latitude: 3.5952,
+    longitude: 98.6722,
+    qibla_bearing: 292.8,
+    daily_streak: 1,
+    star_points: 0,
+    water_drops: 0,
+    garden_tree_level: 1,
+    unlocked_stickers: ['sticker_welcome_star']
+  };
+
+  // Active child being monitored or practicing
+  const activeChild: UserProfile | undefined = (
+    currentRole === 'STUDENT'
+      ? (studentProfile || (!currentUser ? guestStudentFallback : undefined))
+      : (allChildren.find(c => Boolean(c && c.id === selectedChildId)) || allChildren[0] || undefined)
+  );
+
+  const targetStudentId = currentRole === 'STUDENT'
+    ? (studentProfile?.id || (!currentUser ? 'guest-student' : ''))
+    : (activeChild?.id || '');
+
+  const checklists = useLiveQuery(async () => {
+    if (!targetStudentId) return [];
+    return db.murojaah_checklists.where('student_id').equals(targetStudentId).toArray();
+  }, [targetStudentId]) || [];
+
+  const today = todayLocal();
   const todayIbadahLog = useLiveQuery(() => 
     db.ibadah_daily_logs.where('student_id').equals(activeChild?.id || '').first(),
     [activeChild?.id]
@@ -564,6 +629,11 @@ export function App() {
                 onActionClick={handleToggleGender}
               />
 
+              {/* Status Tautan Orang Tua (Khusus Siswa yang Login, Bukan Mode Pratinjau Ortu) */}
+              {currentUser && studentProfile && !isPreviewingStudent && (
+                <ParentLinkCard student={studentProfile} linkedParent={linkedParent || undefined} />
+              )}
+
               {/* Virtual Garden Widget */}
               <PahalaGarden
                 treeLevel={activeChild?.garden_tree_level || 2}
@@ -670,19 +740,33 @@ export function App() {
             parentProfile && (
               <ParentDashboard
                 parentProfile={parentProfile}
-                childProfile={activeChild || studentProfile}
+                childProfile={activeChild}
                 allChildren={allChildren}
                 activeChildId={activeChild?.id || selectedChildId}
                 onSelectChild={(id) => setSelectedChildId(id)}
                 onAddChild={async (childData) => {
-                  const created = await addChildProfile(parentProfile.id, childData);
-                  setSelectedChildId(created.id);
-                  if (supabase) {
-                    try {
-                      await supabase.from('user_profiles').upsert(created, { onConflict: 'id' });
-                    } catch (e) {
-                      console.warn('Gagal sync anak baru ke Supabase:', e);
-                    }
+                  try {
+                    const res = await linkChildByEmail(parentProfile, {
+                      email: childData.email,
+                      fullName: childData.fullName,
+                      gender: childData.gender,
+                      grade: childData.grade,
+                      schoolName: childData.schoolName
+                    });
+                    setSelectedChildId(res.profile.id);
+                    setSyncToast({
+                      show: true,
+                      msg: `✅ Berhasil menghubungkan akun anak: ${res.profile.full_name} (${res.profile.email})`
+                    });
+                    setTimeout(() => setSyncToast(null), 4000);
+                  } catch (err: any) {
+                    setSyncToast({
+                      show: true,
+                      msg: `⚠️ ${err.message || 'Gagal menghubungkan anak'}`,
+                      isError: true
+                    });
+                    setTimeout(() => setSyncToast(null), 4000);
+                    throw err;
                   }
                 }}
                 onDeleteChild={async (childId) => {
@@ -703,9 +787,7 @@ export function App() {
                     }
                   }
                   const remaining = allChildren.filter(c => c.id !== childId);
-                  if (remaining.length > 0) {
-                    setSelectedChildId(remaining[0].id);
-                  }
+                  setSelectedChildId(remaining[0]?.id || '');
                 }}
                 pendingChecklists={checklists.filter(c => c.parent_review_status === 'PENDING')}
                 pendingIbadahLog={todayIbadahLog || defaultIbadahLog}

@@ -25,7 +25,7 @@ import {
   GraduationCap
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { db, seedInitialData } from '../../lib/db';
+import { db } from '../../lib/db';
 
 interface AdminDashboardProps {
   currentUserEmail?: string;
@@ -100,9 +100,6 @@ export function AdminDashboard({ currentUserEmail, onClose }: AdminDashboardProp
     setIsLoading(true);
     setStatusMsg(null);
     try {
-      // Ensure local data is initialized if empty
-      await seedInitialData();
-
       let dataToUse: any[] = [];
 
       if (supabase) {

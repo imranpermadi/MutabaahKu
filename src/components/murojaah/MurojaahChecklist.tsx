@@ -37,7 +37,7 @@ interface MurojaahChecklistProps {
 
 export const MurojaahChecklist: React.FC<MurojaahChecklistProps> = ({
   checklists,
-  currentStudentId = 'student-hafiz-01',
+  currentStudentId = '',
   onPassIncrement,
   onClaimReview,
   onItemAdded
